@@ -853,6 +853,68 @@ class HermesAuthProxyTest(unittest.TestCase):
             "/hermes-1/workspace",
         )
 
+    def test_proxy_rewrites_workspace_redirects_under_workspace_prefix(self):
+        authproxy = self.load_authproxy()
+        config = self.socket_runtime_config(authproxy)
+
+        class FakeUdsClient:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+                self.calls = []
+
+            async def request(self, *args, **kwargs):
+                self.calls.append({"args": args, "kwargs": kwargs})
+                return types.SimpleNamespace(
+                    content=b"",
+                    status_code=307,
+                    headers={"location": self.redirect_location},
+                )
+
+            async def aclose(self):
+                return None
+
+        for upstream_location in ("/dashboard", "http://agent-1/dashboard"):
+            with self.subTest(upstream_location=upstream_location):
+                uds_clients = []
+
+                def build_fake_client(*args, **kwargs):
+                    client = FakeUdsClient(*args, **kwargs)
+                    client.redirect_location = upstream_location
+                    uds_clients.append(client)
+                    return client
+
+                request = self.make_request(
+                    types.SimpleNamespace(),
+                    headers={"x-forwarded-proto": "https"},
+                    cookies={
+                        authproxy.SESSION_COOKIE: json.dumps(
+                            {
+                                "allowed_user": "alice",
+                                "user_domain": config.user_domain,
+                                "agent_id": 1,
+                            }
+                        )
+                    },
+                    path="/hermes-1/workspace",
+                    method="GET",
+                )
+
+                with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+                    authproxy.httpx,
+                    "AsyncClient",
+                    side_effect=build_fake_client,
+                ), mock.patch.object(
+                    authproxy.httpx,
+                    "AsyncHTTPTransport",
+                    side_effect=lambda **kwargs: types.SimpleNamespace(**kwargs),
+                ):
+                    response = asyncio.run(authproxy.proxy("hermes-1/workspace", request))
+
+                self.assertEqual(response.kwargs["status_code"], 307)
+                self.assertEqual(response.kwargs["headers"]["location"], "/hermes-1/workspace/dashboard")
+                self.assertEqual(len(uds_clients), 1)
+                self.assertEqual(uds_clients[0].calls[0]["kwargs"]["url"], "http://agent-1/")
+
     def test_proxy_routes_workspace_post_requests_without_treating_them_as_login_forms(self):
         authproxy = self.load_authproxy()
         config = self.socket_runtime_config(authproxy)

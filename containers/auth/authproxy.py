@@ -664,15 +664,37 @@ def upstream_headers(request, authenticated_username="", app_name="dashboard"):
     return forwarded_headers
 
 
-def response_headers(upstream_response, upstream_base_url):
+def public_path_prefix(request, app_name):
+    route = target_route(request_path(request))
+    if route is None or route[1] != app_name:
+        return ""
+    return f"/hermes-{route[0]}/{app_name}"
+
+
+def rewrite_upstream_location(location, upstream_base_url, path_prefix=""):
+    rewritten = location or ""
+    if rewritten.startswith(upstream_base_url):
+        rewritten = rewritten[len(upstream_base_url) :] or "/"
+    elif rewritten.startswith("//") or not rewritten.startswith("/"):
+        return location
+
+    if not path_prefix:
+        return rewritten
+    if rewritten == "/":
+        return path_prefix
+    if rewritten == path_prefix or rewritten.startswith(f"{path_prefix}/"):
+        return rewritten
+    return f"{path_prefix}{rewritten}"
+
+
+def response_headers(upstream_response, upstream_base_url, path_prefix=""):
     headers = {}
     for name, value in upstream_response.headers.items():
         lower_name = name.lower()
         if lower_name in HOP_BY_HOP_HEADERS or lower_name == "content-length":
             continue
-        if lower_name == "location" and value.startswith(upstream_base_url):
-            rewritten = value[len(upstream_base_url) :]
-            headers[name] = rewritten or "/"
+        if lower_name == "location":
+            headers[name] = rewrite_upstream_location(value, upstream_base_url, path_prefix=path_prefix)
             continue
         headers[name] = value
     return headers
@@ -754,7 +776,11 @@ async def proxy_to_agent(agent_record, request, authenticated_username="", app_n
     return Response(
         content=upstream_response.content,
         status_code=upstream_response.status_code,
-        headers=response_headers(upstream_response, agent_record.upstream_origin),
+        headers=response_headers(
+            upstream_response,
+            agent_record.upstream_origin,
+            path_prefix=public_path_prefix(request, app_name),
+        ),
     )
 
 
