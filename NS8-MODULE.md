@@ -9,13 +9,13 @@ This document summarizes the current checked-in NS8 behavior for `ns8-hermes-age
 - No OpenViking runtime
 - No hidden system agent
 - No shared backend API service
-- One configured agent equals one metadata file, one generated Hermes env file, one generated Hermes secrets env file, and one Hermes home volume. Each started agent additionally owns one primary `hermes@<id>.service`, one `workspace@<id>.service`, one per-agent pod owner unit, one pod, one Hermes container, one Hermes Workspace container, and two socket relay sidecars. The shared auth service and container are module-scoped and are enabled when `base_virtualhost` is set and at least one agent exists
+- One configured agent equals one metadata file, one generated Hermes env file, one generated Hermes secrets env file, and one Hermes home volume. Each started agent additionally owns one primary `hermes@<id>.service`, one `workspace@<id>.service`, one per-agent pod owner unit, one pod, one Hermes container, one Hermes Workspace container, and two socket relay sidecars. The shared auth service and container are module-scoped and are enabled when either `base_virtualhost` or `workspace_virtualhost` is set and at least one agent exists
 
 The implementation keeps the module lifecycle explicit:
 
 - `create-module`: initialize module state only
 - `configure-module`: validate agent input, persist shared publishing settings plus one metadata file per agent, bind the selected user domain, seed first-time agent home content, and reconcile routes and services
-- `get-configuration`: report the shared publishing host, shared `user_domain`, shared `lets_encrypt` flag, and configured agents, preserving desired status only
+- `get-configuration`: report the shared dashboard and workspace publishing hosts, shared `user_domain`, shared `lets_encrypt` flag, and configured agents, preserving desired status only
 - `get-agent-runtime`: report live per-agent runtime state derived from systemd
 - `destroy-module`: stop services, remove managed routes, and remove generated state
 
@@ -31,7 +31,7 @@ The module publishes or references:
 
 `build-images.sh` builds the local module, auth proxy, Hermes wrapper, and socket relay images, and records the workspace image reference in `org.nethserver.images`.
 
-The module image reserves one TCP port and declares `cluster:accountconsumer traefik@node:routeadm node:portsadm` authorizations so it can bind one NS8 user domain and publish one shared auth route.
+The module image reserves one TCP port and declares `cluster:accountconsumer traefik@node:routeadm node:portsadm` authorizations so it can bind one NS8 user domain and publish shared auth routes for the dashboard and workspace hosts through one listener.
 
 ## Input model
 
@@ -40,6 +40,7 @@ The module image reserves one TCP port and declares `cluster:accountconsumer tra
 ```json
 {
   "base_virtualhost": "agents.example.org",
+  "workspace_virtualhost": "workspace.example.org",
   "user_domain": "example.org",
   "lets_encrypt": true,
   "agents": [
@@ -57,13 +58,13 @@ The module image reserves one TCP port and declares `cluster:accountconsumer tra
 Rules:
 
 - `base_virtualhost` is optional and must be a valid FQDN when present
-- `user_domain` is optional while publishing is disabled; when `base_virtualhost` is set and at least one agent exists it becomes required and must resolve through `agent.ldapproxy`
+- `user_domain` is optional while publishing is disabled; when either shared virtualhost is set and at least one agent exists it becomes required and must resolve through `agent.ldapproxy`
 - `lets_encrypt` is optional and must be boolean when present
 - `id` must be an integer between `1` and `30`
 - `name` accepts letters and spaces only
 - `role` must match the shipped role list
 - `status` is `start` or `stop`
-- `allowed_user` is an optional persisted per-agent value while shared publishing is disabled. When `base_virtualhost` is set and at least one agent exists, it becomes required, must be a bare username from the selected `user_domain`, is validated against LDAP whenever `user_domain` is set, and must be unique across the configured agent set
+- `allowed_user` is an optional persisted per-agent value while shared publishing is disabled. When either shared virtualhost is set and at least one agent exists, it becomes required, must be a bare username from the selected `user_domain`, is validated against LDAP whenever `user_domain` is set, and must be unique across the configured agent set
 
 ## Output model
 
@@ -72,6 +73,7 @@ Rules:
 ```json
 {
   "base_virtualhost": "agents.example.org",
+  "workspace_virtualhost": "workspace.example.org",
   "user_domain": "example.org",
   "lets_encrypt": true,
   "agents": [
@@ -86,8 +88,9 @@ Rules:
 }
 ```
 
-`base_virtualhost` is the shared Traefik host for the module's shared auth entrypoint.
-`lets_encrypt` controls whether Traefik should request a Let's Encrypt certificate for that shared host.
+`base_virtualhost` is the shared Traefik dashboard host for the module's shared auth entrypoint.
+`workspace_virtualhost` is the shared Traefik workspace host for the module's shared auth entrypoint.
+`lets_encrypt` controls whether Traefik should request a Let's Encrypt certificate for the published shared hosts.
 `status` is the persisted desired state.
 
 `get-agent-runtime` returns:
@@ -129,7 +132,7 @@ Per-agent Podman volume:
 - bootstrap-managed content inside the volume includes the seeded `SOUL.md` and `.env`; `config.yaml` plus the runtime directory skeleton are created later by the Hermes wrapper entrypoint before Hermes starts for the first time
 - ownership is repaired by a one-shot root helper from the configured Hermes image so `/opt/data` matches that image's dynamic `hermes` UID and GID rather than a hardcoded UID
 
-The active managed Traefik route instance is `<module_id>-hermes-auth`. Hermes home volume names are `hermes-agent-<id>-home`.
+The active managed Traefik route instances are `<module_id>-hermes-auth-dashboard` and `<module_id>-hermes-auth-workspace`. Hermes home volume names are `hermes-agent-<id>-home`.
 
 `sync-agent-runtime` copies the relevant shared SMTP values into each generated Hermes env file and per-agent secrets file, generates the shared auth runtime files, ensures `HERMES_AUTH_SESSION_SECRET` exists in `secrets.env`, ensures each agent has a persistent `API_SERVER_KEY` for the local Hermes gateway API, and writes these auth registry fields for every agent that has `allowed_user` set:
 
@@ -196,9 +199,11 @@ Managed `SOUL.md` and the default Hermes home `.env` are seeded in `configure-mo
 
 The Hermes container runs the gateway and exposes its local API on `127.0.0.1:8642` inside the pod. `hermes-socket@.service` joins the same pod and relays the Hermes dashboard on `127.0.0.1:9120` onto `%S/state/dashboard-sockets/agent-<id>-dashboard.sock`. `workspace@.service` joins the same pod, runs Hermes Workspace on `127.0.0.1:3000`, and consumes `HERMES_API_URL=http://127.0.0.1:8642`, `HERMES_API_TOKEN=${API_SERVER_KEY}`, `HERMES_DASHBOARD_URL=http://127.0.0.1:9120`, and `HERMES_DASHBOARD_TOKEN=${API_SERVER_KEY}`. `workspace-socket@.service` relays Hermes Workspace onto `%S/state/workspace-sockets/agent-<id>.sock`.
 
-The shared auth service mounts both socket directories, listens on `9119`, authenticates access against the shared `user_domain` plus the generated `authproxy_agents.json` registry, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, proxies `/hermes-<id>/dashboard` and `/hermes-<id>/workspace` to the matching per-agent socket, keeps `/hermes-<id>/` as the auth-owned landing page, defaults the shared host root to the assigned dashboard, and returns HTTP 404 for requests to the removed legacy browser alias.
+The shared auth service mounts both socket directories, listens on `9119`, authenticates access against the shared `user_domain` plus the generated `authproxy_agents.json` registry, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, proxies `/hermes-<id>/dashboard` and `/hermes-<id>/workspace` to the matching per-agent socket, keeps `/hermes-<id>/` as the auth-owned landing page, defaults the host root to the assigned dashboard or workspace based on the request host, and returns HTTP 404 for requests to the removed legacy browser alias.
 
-If `base_virtualhost` is set and at least one agent exists, Traefik forwards `https://<base_virtualhost>/` to the shared auth listener on `TCP_PORT` using the route instance `<module>-hermes-auth`.
+If `base_virtualhost` is set and at least one agent exists, Traefik forwards `https://<base_virtualhost>/` to the shared auth listener on `TCP_PORT` using the route instance `<module>-hermes-auth-dashboard`.
+
+If `workspace_virtualhost` is set and at least one agent exists, Traefik forwards `https://<workspace_virtualhost>/` to the same shared auth listener on `TCP_PORT` using the route instance `<module>-hermes-auth-workspace`.
 
 ## Template seeding
 
@@ -223,17 +228,17 @@ Seeding is strict first-write only: later agent edits preserve existing `SOUL.md
 
 ### `configure-module`
 
-- `10validate-input`: validates the submitted agent list, optional shared virtualhost, optional shared `user_domain`, and optional shared `lets_encrypt`
-- `20persist-shared-env`: persists `base_virtualhost`, optional shared `user_domain`, plus `lets_encrypt`, tracks previous values for route cleanup, and backfills `TIMEZONE` when missing
+- `10validate-input`: validates the submitted agent list, optional shared dashboard and workspace virtualhosts, optional shared `user_domain`, and optional shared `lets_encrypt`
+- `20persist-shared-env`: persists `base_virtualhost`, optional `workspace_virtualhost`, optional shared `user_domain`, plus `lets_encrypt`, tracks previous values for route cleanup, and backfills `TIMEZONE` when missing
 - `25configure-user-domain`: binds or unbinds the module relation to the selected NS8 user domain
-- `30remove-deleted-routes`: reserved lifecycle slot; removed-agent route cleanup is no longer needed because the module manages only the shared Traefik route
+- `30remove-deleted-routes`: reserved lifecycle slot; removed-agent route cleanup is no longer needed because the module manages only the shared Traefik auth routes
 - `40remove-deleted-agents`: stops removed services, removes removed pods and containers including `workspace-<id>` and `workspace-socket-<id>`, and delegates generated-state cleanup to `remove-agent-state`
 - `50write-agent-metadata`: writes one `metadata.json` file per desired agent, including persisted `allowed_user`
 - `60refresh-shared-settings`: runs `discover-smarthost`
 - `70sync-agent-runtime`: runs `sync-agent-runtime`, which also fans out `AGENT_ALLOWED_USER` when `allowed_user` is set, adds LDAP runtime env and secrets when `USER_DOMAIN` is set, generates one persistent `API_SERVER_KEY` per agent, and writes `authproxy_agents.json` dashboard/workspace socket entries
 - `75seed-agent-home`: runs a one-shot Hermes container to seed first-time `/opt/data/SOUL.md` and `/opt/data/.env` content from checked-in templates
 - `80reload-systemd`: reloads the user systemd manager
-- `90reconcile-desired-routes`: creates, updates, or clears the shared Traefik route instance `<module>-hermes-auth` when `base_virtualhost` is configured or explicitly changed, including `lets_encrypt` cleanup for host changes or shared TLS disable events
+- `90reconcile-desired-routes`: creates, updates, or clears the shared Traefik route instances `<module>-hermes-auth-dashboard` and `<module>-hermes-auth-workspace` when the dashboard or workspace host is configured or explicitly changed, including `lets_encrypt` cleanup for host changes or shared TLS disable events
 - `95reconcile-agent-services`: enables and starts `hermes@<id>.service`, `workspace@<id>.service`, `hermes-socket@<id>.service`, and `workspace-socket@<id>.service` for desired `start` agents, disables or stops the rest, and manages the shared `hermes-auth.service` when publishing is active
 
 ### `list-user-domains`
@@ -246,7 +251,7 @@ Seeding is strict first-write only: later agent edits preserve existing `SOUL.md
 
 ### `get-configuration`
 
-- `20read`: returns the shared `base_virtualhost`, shared `user_domain`, and the configured agents with desired persisted status plus `allowed_user`
+- `20read`: returns the shared `base_virtualhost`, shared `workspace_virtualhost`, shared `user_domain`, and the configured agents with desired persisted status plus `allowed_user`
 
 ### `get-agent-runtime`
 
@@ -254,7 +259,7 @@ Seeding is strict first-write only: later agent edits preserve existing `SOUL.md
 
 ### `destroy-module`
 
-- `10remove-routes`: removes the shared Traefik route, including one-time certificate cleanup when shared `lets_encrypt` is enabled
+- `10remove-routes`: removes the shared Traefik dashboard and workspace routes, including one-time certificate cleanup when shared `lets_encrypt` is enabled
 - `20stop-services`: disables and stops every known `hermes@<id>.service`, `workspace@<id>.service`, relay unit, pod, and shared auth service, then removes the managed containers if present
 - `30remove-agent-state`: delegates generated-state cleanup for each known agent to `remove-agent-state`
 - `40remove-agents-root`: removes the top-level `agents/` directory
@@ -265,7 +270,7 @@ The checked-in tests cover:
 
 - install with zero active agent services
 - configure with zero agents
-- create one started agent and verify service, container, socket, volume, file, and route wiring
+- create one started agent and verify service, container, socket, volume, and file wiring
 - stop the agent and verify inactive runtime with retained generated files and volume
 - remove the agent and verify cleanup, including volume removal
 - remove the module and verify instance cleanup

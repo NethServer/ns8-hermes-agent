@@ -19,11 +19,15 @@ from hermes_agent_state import (
     AUTHPROXY_ENVFILE,
     AUTHPROXY_SECRETS_ENVFILE,
     BASE_VIRTUALHOST_ENV,
+    HERMES_DASHBOARD_VIRTUALHOST_ENV,
+    HERMES_WORKSPACE_VIRTUALHOST_ENV,
     SMTP_PUBLIC_KEYS,
     SMTP_SECRET_KEY,
     USER_DOMAIN_ENV,
+    WORKSPACE_VIRTUALHOST_ENV,
     agent_dashboard_socket_path,
     agent_workspace_socket_path,
+    normalize_virtualhost,
     read_agents_from_state,
     write_jsonfile,
 )
@@ -124,6 +128,14 @@ def build_authproxy_env(shared_environment):
         "TIMEZONE": timezone_value(shared_environment),
         "TZ": timezone_value(shared_environment),
     }
+
+    dashboard_virtualhost = normalize_virtualhost(shared_environment.get(BASE_VIRTUALHOST_ENV))
+    if dashboard_virtualhost:
+        env_data[HERMES_DASHBOARD_VIRTUALHOST_ENV] = dashboard_virtualhost
+
+    workspace_virtualhost = normalize_virtualhost(shared_environment.get(WORKSPACE_VIRTUALHOST_ENV))
+    if workspace_virtualhost:
+        env_data[HERMES_WORKSPACE_VIRTUALHOST_ENV] = workspace_virtualhost
 
     user_domain = (shared_environment.get(USER_DOMAIN_ENV) or "").strip().lower()
     if user_domain:

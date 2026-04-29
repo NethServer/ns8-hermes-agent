@@ -312,6 +312,29 @@ def request_path(request):
     return normalized_path(request.url.path)
 
 
+def request_host(request):
+    forwarded_host = request.headers.get("x-forwarded-host")
+    host = forwarded_host or request.headers.get("host", "")
+    host = host.split(",", 1)[0]
+    return host.split(":", 1)[0].strip().lower()
+
+
+def default_app_for_request(request):
+    host = request_host(request)
+    dashboard_host = env("HERMES_DASHBOARD_VIRTUALHOST").lower()
+    workspace_host = env("HERMES_WORKSPACE_VIRTUALHOST").lower()
+
+    if workspace_host and host == workspace_host:
+        return "workspace"
+    if dashboard_host and host == dashboard_host:
+        return "dashboard"
+    return "dashboard"
+
+
+def app_interface_name(app_name):
+    return "workspace" if app_name == "workspace" else "dashboard"
+
+
 def normalize_next_path(candidate, fallback="/"):
     value = normalized_path(candidate or fallback)
     if value.startswith("//"):
@@ -373,57 +396,76 @@ def login_target_agent(config, username, explicit_agent_id=None):
     return agent_record
 
 
-def configuration_required_response():
-    html = """<!doctype html>
+def configuration_required_response(request):
+    app_name = app_interface_name(default_app_for_request(request))
+    app_title = app_name.title()
+    html = f"""<!doctype html>
 <html lang=\"en\">
-  <head>
-    <meta charset=\"utf-8\" />
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-    <title>Hermes dashboard access requires configuration</title>
-    <style>
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        padding: 2rem;
-        background: #f4efe5;
-        color: #1f2933;
-        font-family: \"IBM Plex Sans\", sans-serif;
-      }
-      main {
-        max-width: 40rem;
-        background: rgba(255, 255, 255, 0.88);
-        border: 1px solid rgba(31, 41, 51, 0.12);
-        border-radius: 1rem;
-        padding: 2rem;
-        box-shadow: 0 1.5rem 3rem rgba(31, 41, 51, 0.12);
-      }
-      h1 { margin-top: 0; font-size: 1.75rem; }
-      p { line-height: 1.6; }
-      code { font-family: \"IBM Plex Mono\", monospace; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>Dashboard access is not configured</h1>
-      <p>The shared auth service is published, but dashboard authentication is still missing required settings.</p>
-      <p>Select a shared <code>user_domain</code> and one unique <code>allowed_user</code> per agent in the module settings, then save the configuration to enable access.</p>
-    </main>
-  </body>
+    <head>
+        <meta charset=\"utf-8\" />
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+        <title>Hermes {app_name} access requires configuration</title>
+        <style>
+            body {{
+                margin: 0;
+                min-height: 100vh;
+                display: grid;
+                place-items: center;
+                padding: 2rem;
+                background: #f4efe5;
+                color: #1f2933;
+                font-family: \"IBM Plex Sans\", sans-serif;
+            }}
+            main {{
+                max-width: 40rem;
+                background: rgba(255, 255, 255, 0.88);
+                border: 1px solid rgba(31, 41, 51, 0.12);
+                border-radius: 1rem;
+                padding: 2rem;
+                box-shadow: 0 1.5rem 3rem rgba(31, 41, 51, 0.12);
+            }}
+            h1 {{ margin-top: 0; font-size: 1.75rem; }}
+            p {{ line-height: 1.6; }}
+            code {{ font-family: \"IBM Plex Mono\", monospace; }}
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>{app_title} access is not configured</h1>
+            <p>The shared auth service is published, but {app_name} authentication is still missing required settings.</p>
+            <p>Select a shared <code>user_domain</code> and one unique <code>allowed_user</code> per agent in the module settings, then save the configuration to enable access.</p>
+        </main>
+    </body>
 </html>
 """
     return HTMLResponse(html, status_code=503, headers={"Cache-Control": "no-store"})
 
 
-def login_form_response(config, request, error_message="", username="", explicit_agent_id=None, next_path="/"):
+def login_form_response(
+    config,
+    request,
+    error_message="",
+    username="",
+    explicit_agent_id=None,
+    next_path="/",
+    target_app=None,
+):
     target_record = config.agents_by_id.get(explicit_agent_id) if explicit_agent_id is not None else None
-    title = target_record.display_name if target_record is not None else "Hermes dashboard login"
-    heading = f"Sign in to {target_record.display_name}" if target_record is not None else "Sign in to your Hermes dashboard"
-    helper = (
-        f"Authenticate to access {target_record.display_name}."
+    app_name = app_interface_name(target_app or default_app_for_request(request))
+    title = (
+        f"{target_record.display_name} {app_name}"
         if target_record is not None
-        else "Authenticate with your assigned account to access the dashboard routed to your session."
+        else f"Hermes {app_name} login"
+    )
+    heading = (
+        f"Sign in to {target_record.display_name}"
+        if target_record is not None
+        else f"Sign in to your Hermes {app_name}"
+    )
+    helper = (
+        f"Authenticate to access {target_record.display_name} {app_name}."
+        if target_record is not None
+        else f"Authenticate with your assigned account to access the {app_name} routed to your session."
     )
     error_html = f"<p class=\"error\">{escape(error_message)}</p>" if error_message else ""
     action_path = request_path(request) if explicit_agent_id is not None else LOGIN_PATH
@@ -501,7 +543,7 @@ def login_form_response(config, request, error_message="", username="", explicit
         <input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required />
         <button type=\"submit\">Sign in</button>
       </form>
-      <p class=\"meta\">Requests are routed to the dashboard assigned to the authenticated session.</p>
+            <p class=\"meta\">Requests are routed to the {escape(app_name)} assigned to the authenticated session.</p>
     </main>
   </body>
 </html>
@@ -509,12 +551,14 @@ def login_form_response(config, request, error_message="", username="", explicit
     return HTMLResponse(html, status_code=401 if error_message else 200, headers={"Cache-Control": "no-store"})
 
 
-def status_page_response(session_data, current_path):
+def status_page_response(session_data, current_path, request):
     agent_record = session_data["agent"]
-    helper = "Your session will proxy dashboard requests on this host to the assigned agent."
+    app_name = app_interface_name(default_app_for_request(request))
+    helper = f"Your session will proxy {app_name} requests on this host to the assigned agent."
     current_target = target_agent_id(current_path)
     if current_target is not None and current_target != agent_record.agent_id:
         helper = f"Your active session is assigned to {agent_record.display_name}; this page only manages that session."
+    open_label = f"Open {app_name}"
     html = f"""<!doctype html>
 <html lang=\"en\">
   <head>
@@ -564,7 +608,7 @@ def status_page_response(session_data, current_path):
       <p>Authenticated as <code>{escape(session_data['username'])}</code>.</p>
       <p>{escape(helper)}</p>
       <div class=\"actions\">
-        <a href=\"/\">Open dashboard</a>
+                <a href=\"/\">{escape(open_label)}</a>
         <form method=\"post\" action=\"{LOGOUT_PATH}\">
           <input type=\"hidden\" name=\"return_to\" value=\"{escape(current_path)}\" />
           <button type=\"submit\">Log out</button>
@@ -578,8 +622,12 @@ def status_page_response(session_data, current_path):
 
 
 def unauthorized_response():
+    return unauthorized_response_for_app("dashboard")
+
+
+def unauthorized_response_for_app(app_name):
     return PlainTextResponse(
-        "Dashboard authentication required.",
+        f"{app_interface_name(app_name).title()} authentication required.",
         status_code=401,
         headers={"Cache-Control": "no-store"},
     )
@@ -771,7 +819,7 @@ async def proxy_to_agent(agent_record, request, authenticated_username="", app_n
             agent_id=str(agent_record.agent_id),
             detail=f"{exc.__class__.__name__}:{exc}",
         )
-        return upstream_unavailable_response()
+        return upstream_unavailable_response(app_name)
 
     return Response(
         content=upstream_response.content,
@@ -822,9 +870,10 @@ async def proxy(path: str, request: Request):
     )
 
     if not configuration_complete(config):
-        return configuration_required_response()
+        return configuration_required_response(request)
 
     session_data = read_session(request, config)
+    requested_app = explicit_app or default_app_for_request(request)
 
     if request.method == "POST" and (current_path == LOGIN_PATH or (explicit_agent is not None and explicit_app is None)):
         form_data = await parse_form_body(request)
@@ -853,10 +902,11 @@ async def proxy(path: str, request: Request):
             return login_form_response(
                 config,
                 request,
-                error_message="Invalid credentials or no running dashboard is assigned to this account.",
+                error_message="Invalid credentials or no running assigned agent is available for this account.",
                 username=username,
                 explicit_agent_id=explicit_agent,
                 next_path=next_path,
+                target_app=requested_app,
             )
 
         response = RedirectResponse(next_path, status_code=303)
@@ -880,8 +930,14 @@ async def proxy(path: str, request: Request):
 
     if explicit_agent is not None and explicit_app is None:
         if session_data is not None:
-            return status_page_response(session_data, current_path)
-        return login_form_response(config, request, explicit_agent_id=explicit_agent, next_path="/")
+            return status_page_response(session_data, current_path, request)
+        return login_form_response(
+            config,
+            request,
+            explicit_agent_id=explicit_agent,
+            next_path="/",
+            target_app=requested_app,
+        )
 
     if current_path == LOGIN_PATH:
         if session_data is not None:
@@ -890,6 +946,7 @@ async def proxy(path: str, request: Request):
             config,
             request,
             next_path=normalize_next_path(request_next_path(request), "/"),
+            target_app=requested_app,
         )
 
     if session_data is None:
@@ -900,11 +957,12 @@ async def proxy(path: str, request: Request):
                 auth_method="session",
                 detail="missing_session",
             )
-            return unauthorized_response()
+            return unauthorized_response_for_app(requested_app)
         return login_form_response(
             config,
             request,
             next_path=normalize_next_path(request_next_path(request), "/"),
+            target_app=requested_app,
         )
 
     log_auth_event(
@@ -929,7 +987,7 @@ async def proxy(path: str, request: Request):
         session_data["agent"],
         request,
         authenticated_username=session_data["username"],
-        app_name=explicit_app or "dashboard",
+        app_name=requested_app,
     )
 
 

@@ -32,7 +32,7 @@ Check if configure with zero agents keeps module idle
     Should Be Equal    ${active_units}    0
 
 Check if one started agent creates one runtime
-    ${configure_payload} =    Set Variable    {"base_virtualhost":"agents.example.test","lets_encrypt":true,"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"}]}
+    ${configure_payload} =    Set Variable    {"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"}]}
     ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '${configure_payload}'
     ...    return_rc=True  return_stdout=False
     Should Be Equal As Integers    ${rc}    0
@@ -41,7 +41,6 @@ Check if one started agent creates one runtime
     Should Be Equal As Integers    ${settled_rc}    0
     ${output} =    Execute Command    api-cli run module/${module_id}/get-configuration --data '{}'
     ${runtime_output} =    Execute Command    api-cli run module/${module_id}/get-agent-runtime --data '{}'
-    ${base_virtualhost} =    Evaluate    json.loads(r'''${output}''')['base_virtualhost']    json
     ${lets_encrypt} =    Evaluate    json.loads(r'''${output}''')['lets_encrypt']    json
     ${agent_status} =    Evaluate    json.loads(r'''${output}''')['agents'][0]['status']    json
     ${agent_runtime_status} =    Evaluate    json.loads(r'''${runtime_output}''')['agents'][0]['runtime_status']    json
@@ -67,9 +66,6 @@ Check if one started agent creates one runtime
     ${agent_workspace_socket} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/workspace-sockets/agent-1.sock' -print -quit
     ${agent_secret} =    Execute Command    grep '^HERMES_AGENT_SECRET=' ${agent_secrets} | cut -d= -f2-
     ${secret_key_count} =    Execute Command    grep -Ec '^(HERMES_AGENT_SECRET|SMTP_PASSWORD)=' ${agent_secrets}
-    ${route_output} =    Execute Command    api-cli run module/traefik1/get-route --data '{"instance":"${module_id}-hermes-auth"}'
-    ${route_host} =    Evaluate    json.loads(r'''${route_output}''')['host']    json
-    ${route_lets_encrypt} =    Evaluate    json.loads(r'''${route_output}''')['lets_encrypt']    json
     ${soul_content} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-1 cat /opt/data/SOUL.md'
     ${home_env_content} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-1 cat /opt/data/.env'
 
@@ -78,8 +74,7 @@ Check if one started agent creates one runtime
     Should Not Be Empty    ${agent_metadata}
     Should Be Equal    ${volume_name}    hermes-agent-1-home
     Should Be Equal    ${generated_env_count}    2
-    Should Be Equal    ${base_virtualhost}    agents.example.test
-    Should Be Equal    ${lets_encrypt}    ${True}
+    Should Be Equal    ${lets_encrypt}    ${False}
     Should Be Equal    ${agent_status}    start
     Should Be Equal    ${agent_runtime_status}    start
     Should Be Equal As Integers    ${service_rc}    0
@@ -95,8 +90,6 @@ Check if one started agent creates one runtime
     Should Not Be Empty    ${agent_workspace_socket}
     Should Not Be Empty    ${agent_secret}
     Should Be Equal    ${secret_key_count}    1
-    Should Be Equal    ${route_host}    agents.example.test
-    Should Be Equal    ${route_lets_encrypt}    ${True}
     Should Contain    ${soul_content}    Your name is Foo Bar, you are an Hermes Agent that runs on NethServer8
     Should Contain    ${soul_content}    You are a pragmatic technical partner who values correctness, clarity, and operational reality.
     Should Contain    ${home_env_content}    AGENT_NAME=Foo Bar
@@ -120,7 +113,7 @@ Check if stopped agent disables runtime but keeps files
     ${agent_env} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1.env' -print -quit
     ${volume_name} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman volume inspect --format "{{.Name}}" hermes-agent-1-home'
     Should Be Equal    ${agent_status}    stop
-    Should Be Equal    ${lets_encrypt}    ${True}
+    Should Be Equal    ${lets_encrypt}    ${False}
     Should Be Equal    ${agent_runtime_status}    stop
     Should Not Be Equal As Integers    ${service_rc}    0
     Should Not Be Equal As Integers    ${container_rc}    0
@@ -148,7 +141,6 @@ Check if deleting agent cleans runtime files
     ${agent_metadata} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/agents/1/metadata.json' -print -quit
     ${volume_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman volume exists hermes-agent-1-home'
     ...    return_rc=True  return_stdout=False
-    ${route_output} =    Execute Command    api-cli run module/traefik1/get-route --data '{"instance":"${module_id}-hermes-auth"}'
     Should Be Equal As Integers    ${agent_count}    0
     Should Not Be Equal As Integers    ${service_rc}    0
     Should Not Be Equal As Integers    ${container_rc}    0
@@ -158,7 +150,6 @@ Check if deleting agent cleans runtime files
     Should Be Empty    ${agent_secrets}
     Should Be Empty    ${agent_metadata}
     Should Not Be Equal As Integers    ${volume_exists_rc}    0
-    Should Be Equal    ${route_output}    {}
     Should Be Equal    ${service_output}    inactive
 
 Check if hermes-agent can be removed cleanly

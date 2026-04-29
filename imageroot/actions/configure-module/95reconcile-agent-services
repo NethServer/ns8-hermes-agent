@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 from hermes_agent_state import (
     BASE_VIRTUALHOST_PREVIOUS_ENV,
     LETS_ENCRYPT_PREVIOUS_ENV,
+    WORKSPACE_VIRTUALHOST_ENV,
+    WORKSPACE_VIRTUALHOST_PREVIOUS_ENV,
     read_agents_from_state,
 )
 from hermes_user_domain import auth_required
@@ -61,7 +63,11 @@ for agent_data in desired_agents:
 
     stop_disable_agent(agent_id)
 
-if auth_required((os.getenv("BASE_VIRTUALHOST") or "").strip().lower(), desired_agents):
+if auth_required(
+    (os.getenv("BASE_VIRTUALHOST") or "").strip().lower(),
+    desired_agents,
+    (os.getenv(WORKSPACE_VIRTUALHOST_ENV) or "").strip().lower(),
+):
     run(["systemctl", "--user", "enable", "hermes-auth.service"])
     run(["systemctl", "--user", "stop", "hermes-auth.service"], check=False)
     run(["systemctl", "--user", "start", "hermes-auth.service"])
@@ -70,4 +76,5 @@ else:
     run(["podman", "rm", "--force", "hermes-auth"], check=False)
 
 agent.unset_env(BASE_VIRTUALHOST_PREVIOUS_ENV)
+agent.unset_env(WORKSPACE_VIRTUALHOST_PREVIOUS_ENV)
 agent.unset_env(LETS_ENCRYPT_PREVIOUS_ENV)

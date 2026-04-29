@@ -11,8 +11,12 @@ import agent.tasks
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
 from hermes_agent_state import (
+    BASE_VIRTUALHOST_ENV,
     LETS_ENCRYPT_ENV,
+    WORKSPACE_VIRTUALHOST_ENV,
     env_to_bool,
+    legacy_shared_route_instance_name,
+    normalize_virtualhost,
     shared_route_instance_name,
 )
 
@@ -24,15 +28,26 @@ if traefik_agent_id is None:
     sys.exit(0)
 
 cleanup_lets_encrypt = env_to_bool(os.getenv(LETS_ENCRYPT_ENV))
+dashboard_virtualhost = normalize_virtualhost(os.getenv(BASE_VIRTUALHOST_ENV))
+workspace_virtualhost = normalize_virtualhost(os.getenv(WORKSPACE_VIRTUALHOST_ENV))
 
-# Delete the shared route first, then remove any retained legacy per-agent
-# route instances from older module revisions.
-route_request = {"instance": shared_route_instance_name(module_id=os.environ.get("MODULE_ID"))}
-if cleanup_lets_encrypt:
-    route_request["lets_encrypt_cleanup"] = True
+for app_name, _virtualhost in (("dashboard", dashboard_virtualhost), ("workspace", workspace_virtualhost)):
+    route_request = {"instance": shared_route_instance_name(module_id=os.environ.get("MODULE_ID"), app_name=app_name)}
+    if cleanup_lets_encrypt:
+        route_request["lets_encrypt_cleanup"] = True
+    response = agent.tasks.run(
+        agent_id=traefik_agent_id,
+        action="delete-route",
+        data=route_request,
+    )
+    agent.assert_exp(response["exit_code"] == 0)
+
 response = agent.tasks.run(
     agent_id=traefik_agent_id,
     action="delete-route",
-    data=route_request,
+    data={
+        "instance": legacy_shared_route_instance_name(module_id=os.environ.get("MODULE_ID")),
+        **({"lets_encrypt_cleanup": True} if cleanup_lets_encrypt else {}),
+    },
 )
 agent.assert_exp(response["exit_code"] == 0)
