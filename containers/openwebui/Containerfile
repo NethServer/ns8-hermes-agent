@@ -1,3 +1,0 @@
-FROM ghcr.io/open-webui/open-webui:v0.3.32
-LABEL org.opencontainers.image.title="hermes-agent-openwebui"
-LABEL org.opencontainers.image.description="Open WebUI sidecar for NS8 Hermes Agent"

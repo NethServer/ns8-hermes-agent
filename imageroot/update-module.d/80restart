@@ -20,12 +20,20 @@ def is_enabled(service_name):
 for agent_id in list_known_agent_ids():
     service_name = f"hermes@{agent_id}.service"
     socket_service_name = f"hermes-socket@{agent_id}.service"
+    workspace_service_name = f"workspace@{agent_id}.service"
+    workspace_socket_service_name = f"workspace-socket@{agent_id}.service"
 
     if is_enabled(service_name):
         run(["systemctl", "--user", "restart", service_name], check=True)
 
     if is_enabled(socket_service_name):
         run(["systemctl", "--user", "restart", socket_service_name], check=True)
+
+    if is_enabled(workspace_service_name):
+        run(["systemctl", "--user", "restart", workspace_service_name], check=True)
+
+    if is_enabled(workspace_socket_service_name):
+        run(["systemctl", "--user", "restart", workspace_socket_service_name], check=True)
 
 
 if is_enabled("hermes-auth.service"):

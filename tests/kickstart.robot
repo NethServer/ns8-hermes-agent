@@ -14,7 +14,7 @@ Check if hermes-agent is installed correctly
 
 Check if install starts with no agent runtime
     ${active_units} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user list-units "hermes@*.service" --state=active --no-legend | wc -l'
-    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -Ec "^hermes-" || true'
+    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -Ec "^(hermes|workspace)(-socket)?-[0-9]+$" || true'
     Should Be Equal    ${active_units}    0
     Should Be Equal    ${running_containers}    0
 
@@ -36,7 +36,7 @@ Check if one started agent creates one runtime
     ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '${configure_payload}'
     ...    return_rc=True  return_stdout=False
     Should Be Equal As Integers    ${rc}    0
-    ${settled_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'for attempt in $(seq 1 20); do systemctl --user is-active --quiet hermes@1.service && podman pod exists hermes-pod-1 && podman container exists hermes-1 && podman exec hermes-1 test -f /opt/data/SOUL.md && podman exec hermes-1 test -f /opt/data/.env && exit 0; sleep 1; done; exit 1'
+    ${settled_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'for attempt in $(seq 1 20); do systemctl --user is-active --quiet hermes@1.service && systemctl --user is-active --quiet workspace@1.service && systemctl --user is-active --quiet hermes-socket@1.service && systemctl --user is-active --quiet workspace-socket@1.service && podman pod exists hermes-pod-1 && podman container exists hermes-1 && podman container exists workspace-1 && podman container exists hermes-socket-1 && podman container exists workspace-socket-1 && podman exec hermes-1 test -f /opt/data/SOUL.md && podman exec hermes-1 test -f /opt/data/.env && exit 0; sleep 1; done; exit 1'
     ...    return_rc=True  return_stdout=False
     Should Be Equal As Integers    ${settled_rc}    0
     ${output} =    Execute Command    api-cli run module/${module_id}/get-configuration --data '{}'
@@ -52,20 +52,23 @@ Check if one started agent creates one runtime
     ${generated_env_count} =    Execute Command    find ${module_home} -maxdepth 8 -regextype posix-extended -regex '.*/agent_1(_secrets)?\.env' | wc -l
     ${service_output}  ${service_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes@1.service'
     ...    return_rc=True
-    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -Ec "^hermes-" || true'
+    ${workspace_service_output}  ${workspace_service_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active workspace@1.service'
+    ...    return_rc=True
     ${container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-1'
+    ...    return_rc=True  return_stdout=False
+    ${workspace_container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists workspace-1'
     ...    return_rc=True  return_stdout=False
     ${pod_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-pod-1'
     ...    return_rc=True  return_stdout=False
     ${volume_name} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman volume inspect --format "{{.Name}}" hermes-agent-1-home'
     ${agent_name_env} =    Execute Command    grep '^AGENT_NAME=' ${agent_env} | cut -d= -f2-
     ${agent_role_env} =    Execute Command    grep '^AGENT_ROLE=' ${agent_env} | cut -d= -f2-
-    ${agent_dashboard_socket} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/dashboard-sockets/agent-1.sock' -print -quit
+    ${agent_dashboard_socket} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/dashboard-sockets/agent-1-dashboard.sock' -print -quit
+    ${agent_workspace_socket} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/workspace-sockets/agent-1.sock' -print -quit
     ${agent_secret} =    Execute Command    grep '^HERMES_AGENT_SECRET=' ${agent_secrets} | cut -d= -f2-
     ${secret_key_count} =    Execute Command    grep -Ec '^(HERMES_AGENT_SECRET|SMTP_PASSWORD)=' ${agent_secrets}
-    ${route_output} =    Execute Command    api-cli run module/traefik1/get-route --data '{"instance":"${module_id}-hermes-agent-1"}'
+    ${route_output} =    Execute Command    api-cli run module/traefik1/get-route --data '{"instance":"${module_id}-hermes-auth"}'
     ${route_host} =    Evaluate    json.loads(r'''${route_output}''')['host']    json
-    ${route_path} =    Evaluate    json.loads(r'''${route_output}''')['path']    json
     ${route_lets_encrypt} =    Evaluate    json.loads(r'''${route_output}''')['lets_encrypt']    json
     ${soul_content} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-1 cat /opt/data/SOUL.md'
     ${home_env_content} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-1 cat /opt/data/.env'
@@ -80,13 +83,16 @@ Check if one started agent creates one runtime
     Should Be Equal    ${agent_status}    start
     Should Be Equal    ${agent_runtime_status}    start
     Should Be Equal As Integers    ${service_rc}    0
-    Should Be Equal    ${running_containers}    1
+    Should Be Equal As Integers    ${workspace_service_rc}    0
     Should Be Equal As Integers    ${container_rc}    0
+    Should Be Equal As Integers    ${workspace_container_rc}    0
     Should Be Equal As Integers    ${pod_rc}    0
     Should Be Equal    ${service_output}    active
+    Should Be Equal    ${workspace_service_output}    active
     Should Be Equal    ${agent_name_env}    Foo Bar
     Should Be Equal    ${agent_role_env}    developer
     Should Not Be Empty    ${agent_dashboard_socket}
+    Should Not Be Empty    ${agent_workspace_socket}
     Should Not Be Empty    ${agent_secret}
     Should Be Equal    ${secret_key_count}    1
     Should Be Equal    ${route_host}    agents.example.test
@@ -107,7 +113,6 @@ Check if stopped agent disables runtime but keeps files
     ${agent_runtime_status} =    Evaluate    json.loads(r'''${runtime_output}''')['agents'][0]['runtime_status']    json
     ${service_output}  ${service_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes@1.service'
     ...    return_rc=True
-    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -Ec "^hermes-" || true'
     ${container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-1'
     ...    return_rc=True  return_stdout=False
     ${pod_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-pod-1'
@@ -118,7 +123,6 @@ Check if stopped agent disables runtime but keeps files
     Should Be Equal    ${lets_encrypt}    ${True}
     Should Be Equal    ${agent_runtime_status}    stop
     Should Not Be Equal As Integers    ${service_rc}    0
-    Should Be Equal    ${running_containers}    0
     Should Not Be Equal As Integers    ${container_rc}    0
     Should Not Be Equal As Integers    ${pod_rc}    0
     Should Not Be Empty    ${agent_env}
@@ -134,7 +138,6 @@ Check if deleting agent cleans runtime files
     ${agent_count} =    Evaluate    len(json.loads(r'''${output}''')['agents'])    json
     ${service_output}  ${service_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes@1.service'
     ...    return_rc=True
-    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -Ec "^hermes-" || true'
     ${container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-1'
     ...    return_rc=True  return_stdout=False
     ${pod_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-pod-1'
@@ -145,10 +148,9 @@ Check if deleting agent cleans runtime files
     ${agent_metadata} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/agents/1/metadata.json' -print -quit
     ${volume_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman volume exists hermes-agent-1-home'
     ...    return_rc=True  return_stdout=False
-    ${route_output} =    Execute Command    api-cli run module/traefik1/get-route --data '{"instance":"${module_id}-hermes-agent-1"}'
+    ${route_output} =    Execute Command    api-cli run module/traefik1/get-route --data '{"instance":"${module_id}-hermes-auth"}'
     Should Be Equal As Integers    ${agent_count}    0
     Should Not Be Equal As Integers    ${service_rc}    0
-    Should Be Equal    ${running_containers}    0
     Should Not Be Equal As Integers    ${container_rc}    0
     Should Not Be Equal As Integers    ${pod_rc}    0
     Should Be Empty    ${agent_env}

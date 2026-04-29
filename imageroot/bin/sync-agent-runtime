@@ -22,8 +22,8 @@ from hermes_agent_state import (
     SMTP_PUBLIC_KEYS,
     SMTP_SECRET_KEY,
     USER_DOMAIN_ENV,
-    agent_chat_socket_path,
     agent_dashboard_socket_path,
+    agent_workspace_socket_path,
     read_agents_from_state,
     write_jsonfile,
 )
@@ -95,7 +95,6 @@ def build_agent_secrets(existing_agent_secrets, shared_secrets, shared_environme
     env_data = {
         AGENT_SECRET_KEY: existing_agent_secrets.get(AGENT_SECRET_KEY) or generate_secret(),
         API_SERVER_KEY: api_server_key,
-        "OPENAI_API_KEY": api_server_key,
     }
 
     smtp_password = shared_secrets.get(SMTP_SECRET_KEY)
@@ -160,7 +159,7 @@ def build_authproxy_agents(shared_environment):
                 "allowed_user": allowed_user,
                 "status": agent_data["status"],
                 "dashboard_upstream_socket": agent_dashboard_socket_path(agent_data["id"]),
-                "chat_upstream_socket": agent_chat_socket_path(agent_data["id"]),
+                "workspace_upstream_socket": agent_workspace_socket_path(agent_data["id"]),
             }
         )
 

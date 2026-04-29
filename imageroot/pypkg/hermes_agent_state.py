@@ -13,7 +13,9 @@ AUTHPROXY_SECRETS_ENVFILE = Path("authproxy_secrets.env")
 AUTHPROXY_AGENTS_FILE = Path("authproxy_agents.json")
 AGENTS_DIR = Path("agents")
 AGENT_DASHBOARD_SOCKETS_DIR = Path("dashboard-sockets")
-AUTHPROXY_SOCKET_MOUNT_DIR = "/sockets"
+AGENT_WORKSPACE_SOCKETS_DIR = Path("workspace-sockets")
+AUTHPROXY_DASHBOARD_SOCKET_MOUNT_DIR = "/dashboard-sockets"
+AUTHPROXY_WORKSPACE_SOCKET_MOUNT_DIR = "/workspace-sockets"
 SOUL_TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates" / "SOUL"
 MAX_AGENTS = 30
 
@@ -159,23 +161,23 @@ def validate_agent_id(agent_id):
         raise ValueError(f"agent id must be between 1 and {MAX_AGENTS}")
 
 
-
 def agent_dashboard_socket_name(agent_id):
     validate_agent_id(agent_id)
     return f"agent-{agent_id}-dashboard.sock"
 
 
-def agent_chat_socket_name(agent_id):
+def agent_workspace_socket_name(agent_id):
     validate_agent_id(agent_id)
-    return f"agent-{agent_id}-chat.sock"
+    return f"agent-{agent_id}.sock"
 
 
-def agent_dashboard_socket_path(agent_id, socket_dir=AUTHPROXY_SOCKET_MOUNT_DIR):
+def agent_dashboard_socket_path(agent_id, socket_dir=AUTHPROXY_DASHBOARD_SOCKET_MOUNT_DIR):
     return str(Path(socket_dir) / agent_dashboard_socket_name(agent_id))
 
 
-def agent_chat_socket_path(agent_id, socket_dir=AUTHPROXY_SOCKET_MOUNT_DIR):
-    return str(Path(socket_dir) / agent_chat_socket_name(agent_id))
+def agent_workspace_socket_path(agent_id, socket_dir=AUTHPROXY_WORKSPACE_SOCKET_MOUNT_DIR):
+    return str(Path(socket_dir) / agent_workspace_socket_name(agent_id))
+
 
 def read_agents_from_state():
     def validate_agent_metadata(agent_data, index):

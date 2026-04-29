@@ -23,7 +23,8 @@ SESSION_COOKIE = "hermes_dashboard_session"
 SESSION_TTL_SECONDS = 8 * 60 * 60
 LOGIN_PATH = "/login"
 LOGOUT_PATH = "/logout"
-TARGET_PATH_PATTERN = re.compile(r"^/hermes-(\d+)(?:/(dashboard|chat)(?:/.*)?|/?)$")
+TARGET_PATH_PATTERN = re.compile(r"^/hermes-(\d+)(?:/(dashboard|workspace)(?:/.*)?|/?)$")
+LEGACY_CHAT_PATH_PATTERN = re.compile(r"^/hermes-(\d+)/" + "chat" + r"(?:/.*)?$")
 AUTHENTICATED_USER_HEADER = "X-Hermes-Authenticated-User"
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -46,7 +47,7 @@ class AgentRecord:
     status: str
     upstream_url: str = ""
     dashboard_upstream_socket: str = ""
-    chat_upstream_socket: str = ""
+    workspace_upstream_socket: str = ""
 
     @property
     def display_name(self):
@@ -59,8 +60,8 @@ class AgentRecord:
         return f"http://agent-{self.agent_id}"
 
     def upstream_socket_for(self, app_name):
-        if app_name == "chat":
-            return self.chat_upstream_socket
+        if app_name == "workspace":
+            return self.workspace_upstream_socket
         return self.dashboard_upstream_socket
 
     def has_upstream_for(self, app_name):
@@ -130,7 +131,7 @@ def load_agent_registry(path):
                 dashboard_upstream_socket=str(
                     raw_agent.get("dashboard_upstream_socket") or raw_agent.get("upstream_socket") or ""
                 ).strip(),
-                chat_upstream_socket=str(raw_agent.get("chat_upstream_socket") or "").strip(),
+                workspace_upstream_socket=str(raw_agent.get("workspace_upstream_socket") or "").strip(),
             )
         except (KeyError, TypeError, ValueError):
             continue
@@ -139,7 +140,7 @@ def load_agent_registry(path):
             continue
         if agent_record.dashboard_upstream_socket and not agent_record.dashboard_upstream_socket.startswith("/"):
             continue
-        if agent_record.chat_upstream_socket and not agent_record.chat_upstream_socket.startswith("/"):
+        if agent_record.workspace_upstream_socket and not agent_record.workspace_upstream_socket.startswith("/"):
             continue
         if agent_record.allowed_user in agents_by_user:
             return {}, {}
@@ -289,6 +290,10 @@ def target_route(path):
     return agent_id, app_name
 
 
+def legacy_chat_path(path):
+    return LEGACY_CHAT_PATH_PATTERN.fullmatch(path or "/") is not None
+
+
 def target_agent_id(path):
     route = target_route(path)
     if route is None:
@@ -312,6 +317,8 @@ def normalize_next_path(candidate, fallback="/"):
     if value.startswith("//"):
         return fallback
     if value in {LOGIN_PATH, LOGOUT_PATH}:
+        return fallback
+    if legacy_chat_path(value):
         return fallback
     route = target_route(value)
     if route is not None and route[1] is None:
@@ -587,10 +594,18 @@ def route_mismatch_response():
 
 
 def upstream_unavailable_response(app_name="dashboard"):
-    target_name = "chat interface" if app_name == "chat" else "dashboard"
+    target_name = "workspace interface" if app_name == "workspace" else "dashboard"
     return PlainTextResponse(
         f"Assigned {target_name} is temporarily unavailable.",
-        status_code=503 if app_name == "chat" else 502,
+        status_code=503 if app_name == "workspace" else 502,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def legacy_chat_gone_response():
+    return PlainTextResponse(
+        "Not Found",
+        status_code=404,
         headers={"Cache-Control": "no-store"},
     )
 
@@ -615,7 +630,7 @@ def request_next_path(request):
     return path
 
 
-def upstream_headers(request, authenticated_username=""):
+def upstream_headers(request, authenticated_username="", app_name="dashboard"):
     forwarded_headers = {}
     for name, value in request.headers.items():
         lower_name = name.lower()
@@ -638,10 +653,14 @@ def upstream_headers(request, authenticated_username=""):
     if authenticated_username:
         forwarded_headers[AUTHENTICATED_USER_HEADER] = authenticated_username
 
-    forwarded_headers["Host"] = "127.0.0.1:9120"
+    forwarded_headers["Host"] = "127.0.0.1:3000" if app_name == "workspace" else "127.0.0.1:9120"
     forwarded_headers["X-Forwarded-Proto"] = request.headers.get("x-forwarded-proto", "http")
     forwarded_headers["X-Forwarded-Host"] = request.headers.get("x-forwarded-host", request.headers.get("host", ""))
     forwarded_headers["X-Forwarded-For"] = client_host(request)
+    if app_name == "workspace":
+        route = target_route(request_path(request))
+        if route is not None:
+            forwarded_headers["X-Forwarded-Prefix"] = f"/hermes-{route[0]}/workspace"
     return forwarded_headers
 
 
@@ -665,8 +684,8 @@ def upstream_path_for_request(request, app_name):
         prefix = None
         if app_name == "dashboard":
             prefix = f"/hermes-{target_agent_id(path)}/dashboard" if target_route(path) else None
-        elif app_name == "chat":
-            prefix = f"/hermes-{target_agent_id(path)}/chat" if target_route(path) else None
+        elif app_name == "workspace":
+            prefix = f"/hermes-{target_agent_id(path)}/workspace" if target_route(path) else None
         if prefix and path.startswith(prefix):
             stripped = path[len(prefix):]
             return stripped or "/"
@@ -720,7 +739,7 @@ async def proxy_to_agent(agent_record, request, authenticated_username="", app_n
         upstream_response = await upstream_client.request(
             method=request.method,
             url=upstream_url,
-            headers=upstream_headers(request, authenticated_username=authenticated_username),
+            headers=upstream_headers(request, authenticated_username=authenticated_username, app_name=app_name),
             content=await request.body(),
         )
     except httpx.RequestError as exc:
@@ -763,6 +782,9 @@ async def proxy(path: str, request: Request):
     del path
     config = load_config()
     current_path = request_path(request)
+    if legacy_chat_path(current_path):
+        return legacy_chat_gone_response()
+
     explicit_route = target_route(current_path)
     explicit_agent = explicit_route[0] if explicit_route is not None else None
     explicit_app = explicit_route[1] if explicit_route is not None else None
