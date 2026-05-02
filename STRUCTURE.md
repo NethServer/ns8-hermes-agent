@@ -75,7 +75,7 @@ This document maps the current checked-in layout.
 ### `imageroot/systemd/user/`
 
 - `hermes@.service`: per-agent Hermes gateway service with the local API server enabled.
-- `workspace@.service`: per-agent Hermes Workspace sidecar wired to the local Hermes gateway and dashboard.
+- `workspace@.service`: per-agent Hermes Workspace sidecar wired to the local Hermes gateway and dashboard, using the generated per-agent API token, dashboard session-token fallback, and a bind mount of the agent volume's `home/` subdirectory at `/opt/data/home`.
 - `hermes-socket@.service`: per-agent dashboard socket relay sidecar that exposes the Hermes dashboard over a Unix socket.
 - `workspace-socket@.service`: per-agent workspace socket relay sidecar that exposes Hermes Workspace over a Unix socket.
 - `hermes-auth.service`: shared authentication proxy service for the shared dashboard and workspace virtualhosts.
