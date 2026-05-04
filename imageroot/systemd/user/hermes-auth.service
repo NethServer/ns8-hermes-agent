@@ -11,6 +11,7 @@ KillMode=none
 Type=notify
 NotifyAccess=all
 ExecStartPre=/usr/bin/install -d -m 0770 %S/state/dashboard-sockets
+ExecStartPre=/usr/bin/install -d -m 0770 %S/state/workspace-sockets
 ExecStartPre=/usr/local/bin/runagent sync-agent-runtime
 ExecStartPre=-/usr/bin/podman rm --force hermes-auth
 ExecStart=runagent /usr/bin/podman run \
@@ -26,7 +27,8 @@ ExecStart=runagent /usr/bin/podman run \
 		--env AUTH_PROXY_PORT=9119 \
 		--env AUTH_PROXY_AGENT_REGISTRY=/app/authproxy_agents.json \
 		--volume %S/state/authproxy_agents.json:/app/authproxy_agents.json:ro,z \
-		--volume %S/state/dashboard-sockets:/sockets:z \
+		--volume %S/state/dashboard-sockets:/dashboard-sockets:z \
+		--volume %S/state/workspace-sockets:/workspace-sockets:z \
 		--tz=${TIMEZONE} \
 		${HERMES_AGENT_AUTH_IMAGE} \
 		python /app/authproxy.py

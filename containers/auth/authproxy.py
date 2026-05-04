@@ -23,7 +23,8 @@ SESSION_COOKIE = "hermes_dashboard_session"
 SESSION_TTL_SECONDS = 8 * 60 * 60
 LOGIN_PATH = "/login"
 LOGOUT_PATH = "/logout"
-TARGET_PATH_PATTERN = re.compile(r"^/hermes-(\d+)/?$")
+TARGET_PATH_PATTERN = re.compile(r"^/hermes-(\d+)(?:/(dashboard|workspace)(?:/.*)?|/?)$")
+LEGACY_CHAT_PATH_PATTERN = re.compile(r"^/hermes-(\d+)/" + "chat" + r"(?:/.*)?$")
 AUTHENTICATED_USER_HEADER = "X-Hermes-Authenticated-User"
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -45,7 +46,8 @@ class AgentRecord:
     allowed_user: str
     status: str
     upstream_url: str = ""
-    upstream_socket: str = ""
+    dashboard_upstream_socket: str = ""
+    workspace_upstream_socket: str = ""
 
     @property
     def display_name(self):
@@ -57,9 +59,13 @@ class AgentRecord:
             return self.upstream_url.rstrip("/")
         return f"http://agent-{self.agent_id}"
 
-    @property
-    def has_upstream(self):
-        return bool(self.upstream_url or self.upstream_socket)
+    def upstream_socket_for(self, app_name):
+        if app_name == "workspace":
+            return self.workspace_upstream_socket
+        return self.dashboard_upstream_socket
+
+    def has_upstream_for(self, app_name):
+        return bool(self.upstream_url or self.upstream_socket_for(app_name))
 
 
 @dataclass(frozen=True)
@@ -122,14 +128,19 @@ def load_agent_registry(path):
                 allowed_user=str(raw_agent["allowed_user"]).strip(),
                 status=str(raw_agent.get("status") or "").strip().lower(),
                 upstream_url=str(raw_agent.get("upstream_url") or "").rstrip("/"),
-                upstream_socket=str(raw_agent.get("upstream_socket") or "").strip(),
+                dashboard_upstream_socket=str(
+                    raw_agent.get("dashboard_upstream_socket") or raw_agent.get("upstream_socket") or ""
+                ).strip(),
+                workspace_upstream_socket=str(raw_agent.get("workspace_upstream_socket") or "").strip(),
             )
         except (KeyError, TypeError, ValueError):
             continue
 
-        if not agent_record.allowed_user or not agent_record.has_upstream:
+        if not agent_record.allowed_user or not agent_record.has_upstream_for("dashboard"):
             continue
-        if agent_record.upstream_socket and not agent_record.upstream_socket.startswith("/"):
+        if agent_record.dashboard_upstream_socket and not agent_record.dashboard_upstream_socket.startswith("/"):
+            continue
+        if agent_record.workspace_upstream_socket and not agent_record.workspace_upstream_socket.startswith("/"):
             continue
         if agent_record.allowed_user in agents_by_user:
             return {}, {}
@@ -270,11 +281,24 @@ def authenticate_credentials(username, password, config):
         return False
 
 
-def target_agent_id(path):
+def target_route(path):
     match = TARGET_PATH_PATTERN.fullmatch(path or "/")
     if match is None:
         return None
-    return int(match.group(1))
+    agent_id = int(match.group(1))
+    app_name = match.group(2)
+    return agent_id, app_name
+
+
+def legacy_chat_path(path):
+    return LEGACY_CHAT_PATH_PATTERN.fullmatch(path or "/") is not None
+
+
+def target_agent_id(path):
+    route = target_route(path)
+    if route is None:
+        return None
+    return route[0]
 
 
 def normalized_path(path):
@@ -288,13 +312,39 @@ def request_path(request):
     return normalized_path(request.url.path)
 
 
+def request_host(request):
+    forwarded_host = request.headers.get("x-forwarded-host")
+    host = forwarded_host or request.headers.get("host", "")
+    host = host.split(",", 1)[0]
+    return host.split(":", 1)[0].strip().lower()
+
+
+def default_app_for_request(request):
+    host = request_host(request)
+    dashboard_host = env("HERMES_DASHBOARD_VIRTUALHOST").lower()
+    workspace_host = env("HERMES_WORKSPACE_VIRTUALHOST").lower()
+
+    if workspace_host and host == workspace_host:
+        return "workspace"
+    if dashboard_host and host == dashboard_host:
+        return "dashboard"
+    return "dashboard"
+
+
+def app_interface_name(app_name):
+    return "workspace" if app_name == "workspace" else "dashboard"
+
+
 def normalize_next_path(candidate, fallback="/"):
     value = normalized_path(candidate or fallback)
     if value.startswith("//"):
         return fallback
     if value in {LOGIN_PATH, LOGOUT_PATH}:
         return fallback
-    if target_agent_id(value) is not None:
+    if legacy_chat_path(value):
+        return fallback
+    route = target_route(value)
+    if route is not None and route[1] is None:
         return fallback
     return value
 
@@ -346,57 +396,76 @@ def login_target_agent(config, username, explicit_agent_id=None):
     return agent_record
 
 
-def configuration_required_response():
-    html = """<!doctype html>
+def configuration_required_response(request):
+    app_name = app_interface_name(default_app_for_request(request))
+    app_title = app_name.title()
+    html = f"""<!doctype html>
 <html lang=\"en\">
-  <head>
-    <meta charset=\"utf-8\" />
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-    <title>Hermes dashboard access requires configuration</title>
-    <style>
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        padding: 2rem;
-        background: #f4efe5;
-        color: #1f2933;
-        font-family: \"IBM Plex Sans\", sans-serif;
-      }
-      main {
-        max-width: 40rem;
-        background: rgba(255, 255, 255, 0.88);
-        border: 1px solid rgba(31, 41, 51, 0.12);
-        border-radius: 1rem;
-        padding: 2rem;
-        box-shadow: 0 1.5rem 3rem rgba(31, 41, 51, 0.12);
-      }
-      h1 { margin-top: 0; font-size: 1.75rem; }
-      p { line-height: 1.6; }
-      code { font-family: \"IBM Plex Mono\", monospace; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>Dashboard access is not configured</h1>
-      <p>The shared auth service is published, but dashboard authentication is still missing required settings.</p>
-      <p>Select a shared <code>user_domain</code> and one unique <code>allowed_user</code> per agent in the module settings, then save the configuration to enable access.</p>
-    </main>
-  </body>
+    <head>
+        <meta charset=\"utf-8\" />
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+        <title>Hermes {app_name} access requires configuration</title>
+        <style>
+            body {{
+                margin: 0;
+                min-height: 100vh;
+                display: grid;
+                place-items: center;
+                padding: 2rem;
+                background: #f4efe5;
+                color: #1f2933;
+                font-family: \"IBM Plex Sans\", sans-serif;
+            }}
+            main {{
+                max-width: 40rem;
+                background: rgba(255, 255, 255, 0.88);
+                border: 1px solid rgba(31, 41, 51, 0.12);
+                border-radius: 1rem;
+                padding: 2rem;
+                box-shadow: 0 1.5rem 3rem rgba(31, 41, 51, 0.12);
+            }}
+            h1 {{ margin-top: 0; font-size: 1.75rem; }}
+            p {{ line-height: 1.6; }}
+            code {{ font-family: \"IBM Plex Mono\", monospace; }}
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>{app_title} access is not configured</h1>
+            <p>The shared auth service is published, but {app_name} authentication is still missing required settings.</p>
+            <p>Select a shared <code>user_domain</code> and one unique <code>allowed_user</code> per agent in the module settings, then save the configuration to enable access.</p>
+        </main>
+    </body>
 </html>
 """
     return HTMLResponse(html, status_code=503, headers={"Cache-Control": "no-store"})
 
 
-def login_form_response(config, request, error_message="", username="", explicit_agent_id=None, next_path="/"):
+def login_form_response(
+    config,
+    request,
+    error_message="",
+    username="",
+    explicit_agent_id=None,
+    next_path="/",
+    target_app=None,
+):
     target_record = config.agents_by_id.get(explicit_agent_id) if explicit_agent_id is not None else None
-    title = target_record.display_name if target_record is not None else "Hermes dashboard login"
-    heading = f"Sign in to {target_record.display_name}" if target_record is not None else "Sign in to your Hermes dashboard"
-    helper = (
-        f"Authenticate to access {target_record.display_name}."
+    app_name = app_interface_name(target_app or default_app_for_request(request))
+    title = (
+        f"{target_record.display_name} {app_name}"
         if target_record is not None
-        else "Authenticate with your assigned account to access the dashboard routed to your session."
+        else f"Hermes {app_name} login"
+    )
+    heading = (
+        f"Sign in to {target_record.display_name}"
+        if target_record is not None
+        else f"Sign in to your Hermes {app_name}"
+    )
+    helper = (
+        f"Authenticate to access {target_record.display_name} {app_name}."
+        if target_record is not None
+        else f"Authenticate with your assigned account to access the {app_name} routed to your session."
     )
     error_html = f"<p class=\"error\">{escape(error_message)}</p>" if error_message else ""
     action_path = request_path(request) if explicit_agent_id is not None else LOGIN_PATH
@@ -474,7 +543,7 @@ def login_form_response(config, request, error_message="", username="", explicit
         <input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required />
         <button type=\"submit\">Sign in</button>
       </form>
-      <p class=\"meta\">Requests are routed to the dashboard assigned to the authenticated session.</p>
+            <p class=\"meta\">Requests are routed to the {escape(app_name)} assigned to the authenticated session.</p>
     </main>
   </body>
 </html>
@@ -482,12 +551,14 @@ def login_form_response(config, request, error_message="", username="", explicit
     return HTMLResponse(html, status_code=401 if error_message else 200, headers={"Cache-Control": "no-store"})
 
 
-def status_page_response(session_data, current_path):
+def status_page_response(session_data, current_path, request):
     agent_record = session_data["agent"]
-    helper = "Your session will proxy dashboard requests on this host to the assigned agent."
+    app_name = app_interface_name(default_app_for_request(request))
+    helper = f"Your session will proxy {app_name} requests on this host to the assigned agent."
     current_target = target_agent_id(current_path)
     if current_target is not None and current_target != agent_record.agent_id:
         helper = f"Your active session is assigned to {agent_record.display_name}; this page only manages that session."
+    open_label = f"Open {app_name}"
     html = f"""<!doctype html>
 <html lang=\"en\">
   <head>
@@ -537,7 +608,7 @@ def status_page_response(session_data, current_path):
       <p>Authenticated as <code>{escape(session_data['username'])}</code>.</p>
       <p>{escape(helper)}</p>
       <div class=\"actions\">
-        <a href=\"/\">Open dashboard</a>
+                <a href=\"/\">{escape(open_label)}</a>
         <form method=\"post\" action=\"{LOGOUT_PATH}\">
           <input type=\"hidden\" name=\"return_to\" value=\"{escape(current_path)}\" />
           <button type=\"submit\">Log out</button>
@@ -551,17 +622,38 @@ def status_page_response(session_data, current_path):
 
 
 def unauthorized_response():
+    return unauthorized_response_for_app("dashboard")
+
+
+def unauthorized_response_for_app(app_name):
     return PlainTextResponse(
-        "Dashboard authentication required.",
+        f"{app_interface_name(app_name).title()} authentication required.",
         status_code=401,
         headers={"Cache-Control": "no-store"},
     )
 
 
-def upstream_unavailable_response():
+def route_mismatch_response():
     return PlainTextResponse(
-        "Assigned dashboard is temporarily unavailable.",
-        status_code=502,
+        "Requested agent path does not match the active session.",
+        status_code=404,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def upstream_unavailable_response(app_name="dashboard"):
+    target_name = "workspace interface" if app_name == "workspace" else "dashboard"
+    return PlainTextResponse(
+        f"Assigned {target_name} is temporarily unavailable.",
+        status_code=503 if app_name == "workspace" else 502,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def legacy_chat_gone_response():
+    return PlainTextResponse(
+        "Not Found",
+        status_code=404,
         headers={"Cache-Control": "no-store"},
     )
 
@@ -586,7 +678,7 @@ def request_next_path(request):
     return path
 
 
-def upstream_headers(request, authenticated_username=""):
+def upstream_headers(request, authenticated_username="", app_name="dashboard"):
     forwarded_headers = {}
     for name, value in request.headers.items():
         lower_name = name.lower()
@@ -609,36 +701,77 @@ def upstream_headers(request, authenticated_username=""):
     if authenticated_username:
         forwarded_headers[AUTHENTICATED_USER_HEADER] = authenticated_username
 
-    forwarded_headers["Host"] = "127.0.0.1:9120"
+    forwarded_headers["Host"] = "127.0.0.1:3000" if app_name == "workspace" else "127.0.0.1:9120"
     forwarded_headers["X-Forwarded-Proto"] = request.headers.get("x-forwarded-proto", "http")
     forwarded_headers["X-Forwarded-Host"] = request.headers.get("x-forwarded-host", request.headers.get("host", ""))
     forwarded_headers["X-Forwarded-For"] = client_host(request)
+    if app_name == "workspace":
+        route = target_route(request_path(request))
+        if route is not None:
+            forwarded_headers["X-Forwarded-Prefix"] = f"/hermes-{route[0]}/workspace"
     return forwarded_headers
 
 
-def response_headers(upstream_response, upstream_base_url):
+def public_path_prefix(request, app_name):
+    route = target_route(request_path(request))
+    if route is None or route[1] != app_name:
+        return ""
+    return f"/hermes-{route[0]}/{app_name}"
+
+
+def rewrite_upstream_location(location, upstream_base_url, path_prefix=""):
+    rewritten = location or ""
+    if rewritten.startswith(upstream_base_url):
+        rewritten = rewritten[len(upstream_base_url) :] or "/"
+    elif rewritten.startswith("//") or not rewritten.startswith("/"):
+        return location
+
+    if not path_prefix:
+        return rewritten
+    if rewritten == "/":
+        return path_prefix
+    if rewritten == path_prefix or rewritten.startswith(f"{path_prefix}/"):
+        return rewritten
+    return f"{path_prefix}{rewritten}"
+
+
+def response_headers(upstream_response, upstream_base_url, path_prefix=""):
     headers = {}
     for name, value in upstream_response.headers.items():
         lower_name = name.lower()
         if lower_name in HOP_BY_HOP_HEADERS or lower_name == "content-length":
             continue
-        if lower_name == "location" and value.startswith(upstream_base_url):
-            rewritten = value[len(upstream_base_url) :]
-            headers[name] = rewritten or "/"
+        if lower_name == "location":
+            headers[name] = rewrite_upstream_location(value, upstream_base_url, path_prefix=path_prefix)
             continue
         headers[name] = value
     return headers
 
 
-def upstream_request_url(agent_record, request):
-    upstream_url = f"{agent_record.upstream_origin}{request.url.path}"
+def upstream_path_for_request(request, app_name):
+    path = request.url.path or "/"
+    if path.startswith("/"):
+        prefix = None
+        if app_name == "dashboard":
+            prefix = f"/hermes-{target_agent_id(path)}/dashboard" if target_route(path) else None
+        elif app_name == "workspace":
+            prefix = f"/hermes-{target_agent_id(path)}/workspace" if target_route(path) else None
+        if prefix and path.startswith(prefix):
+            stripped = path[len(prefix):]
+            return stripped or "/"
+    return path
+
+
+def upstream_request_url(agent_record, request, app_name):
+    upstream_url = f"{agent_record.upstream_origin}{upstream_path_for_request(request, app_name)}"
     if request.url.query:
         upstream_url = f"{upstream_url}?{request.url.query}"
     return upstream_url
 
 
-def upstream_client_for_agent(request, agent_record):
-    if not agent_record.upstream_socket:
+def upstream_client_for_agent(request, agent_record, app_name):
+    upstream_socket = agent_record.upstream_socket_for(app_name)
+    if not upstream_socket:
         return request.app.state.client
 
     uds_clients = getattr(request.app.state, "uds_clients", None)
@@ -646,21 +779,24 @@ def upstream_client_for_agent(request, agent_record):
         uds_clients = {}
         request.app.state.uds_clients = uds_clients
 
-    client = uds_clients.get(agent_record.upstream_socket)
+    client = uds_clients.get(upstream_socket)
     if client is None:
         client = httpx.AsyncClient(
             timeout=60.0,
             follow_redirects=False,
-            transport=httpx.AsyncHTTPTransport(uds=agent_record.upstream_socket),
+            transport=httpx.AsyncHTTPTransport(uds=upstream_socket),
         )
-        uds_clients[agent_record.upstream_socket] = client
+        uds_clients[upstream_socket] = client
 
     return client
 
 
-async def proxy_to_agent(agent_record, request, authenticated_username=""):
-    upstream_url = upstream_request_url(agent_record, request)
-    upstream_client = upstream_client_for_agent(request, agent_record)
+async def proxy_to_agent(agent_record, request, authenticated_username="", app_name="dashboard"):
+    if not agent_record.has_upstream_for(app_name):
+        return upstream_unavailable_response(app_name)
+
+    upstream_url = upstream_request_url(agent_record, request, app_name)
+    upstream_client = upstream_client_for_agent(request, agent_record, app_name)
 
     log_debug_event(
         "proxy_forward",
@@ -673,7 +809,7 @@ async def proxy_to_agent(agent_record, request, authenticated_username=""):
         upstream_response = await upstream_client.request(
             method=request.method,
             url=upstream_url,
-            headers=upstream_headers(request, authenticated_username=authenticated_username),
+            headers=upstream_headers(request, authenticated_username=authenticated_username, app_name=app_name),
             content=await request.body(),
         )
     except httpx.RequestError as exc:
@@ -683,12 +819,16 @@ async def proxy_to_agent(agent_record, request, authenticated_username=""):
             agent_id=str(agent_record.agent_id),
             detail=f"{exc.__class__.__name__}:{exc}",
         )
-        return upstream_unavailable_response()
+        return upstream_unavailable_response(app_name)
 
     return Response(
         content=upstream_response.content,
         status_code=upstream_response.status_code,
-        headers=response_headers(upstream_response, agent_record.upstream_origin),
+        headers=response_headers(
+            upstream_response,
+            agent_record.upstream_origin,
+            path_prefix=public_path_prefix(request, app_name),
+        ),
     )
 
 
@@ -716,7 +856,12 @@ async def proxy(path: str, request: Request):
     del path
     config = load_config()
     current_path = request_path(request)
-    explicit_agent = target_agent_id(current_path)
+    if legacy_chat_path(current_path):
+        return legacy_chat_gone_response()
+
+    explicit_route = target_route(current_path)
+    explicit_agent = explicit_route[0] if explicit_route is not None else None
+    explicit_app = explicit_route[1] if explicit_route is not None else None
 
     log_debug_event(
         "request_received",
@@ -725,11 +870,12 @@ async def proxy(path: str, request: Request):
     )
 
     if not configuration_complete(config):
-        return configuration_required_response()
+        return configuration_required_response(request)
 
     session_data = read_session(request, config)
+    requested_app = explicit_app or default_app_for_request(request)
 
-    if request.method == "POST" and (current_path == LOGIN_PATH or explicit_agent is not None):
+    if request.method == "POST" and (current_path == LOGIN_PATH or (explicit_agent is not None and explicit_app is None)):
         form_data = await parse_form_body(request)
         username = (form_data.get("username") or "").strip()
         password = form_data.get("password") or ""
@@ -756,10 +902,11 @@ async def proxy(path: str, request: Request):
             return login_form_response(
                 config,
                 request,
-                error_message="Invalid credentials or no running dashboard is assigned to this account.",
+                error_message="Invalid credentials or no running assigned agent is available for this account.",
                 username=username,
                 explicit_agent_id=explicit_agent,
                 next_path=next_path,
+                target_app=requested_app,
             )
 
         response = RedirectResponse(next_path, status_code=303)
@@ -781,10 +928,16 @@ async def proxy(path: str, request: Request):
         )
         return response
 
-    if explicit_agent is not None:
+    if explicit_agent is not None and explicit_app is None:
         if session_data is not None:
-            return status_page_response(session_data, current_path)
-        return login_form_response(config, request, explicit_agent_id=explicit_agent, next_path="/")
+            return status_page_response(session_data, current_path, request)
+        return login_form_response(
+            config,
+            request,
+            explicit_agent_id=explicit_agent,
+            next_path="/",
+            target_app=requested_app,
+        )
 
     if current_path == LOGIN_PATH:
         if session_data is not None:
@@ -793,6 +946,7 @@ async def proxy(path: str, request: Request):
             config,
             request,
             next_path=normalize_next_path(request_next_path(request), "/"),
+            target_app=requested_app,
         )
 
     if session_data is None:
@@ -803,11 +957,12 @@ async def proxy(path: str, request: Request):
                 auth_method="session",
                 detail="missing_session",
             )
-            return unauthorized_response()
+            return unauthorized_response_for_app(requested_app)
         return login_form_response(
             config,
             request,
             next_path=normalize_next_path(request_next_path(request), "/"),
+            target_app=requested_app,
         )
 
     log_auth_event(
@@ -817,10 +972,22 @@ async def proxy(path: str, request: Request):
         username=session_data["username"],
         auth_method="session",
     )
+    if explicit_agent is not None and explicit_app is not None and explicit_agent != session_data["agent"].agent_id:
+        log_auth_event(
+            "auth_failed",
+            request,
+            agent_id=str(explicit_agent),
+            username=session_data["username"],
+            auth_method="session",
+            detail="route_mismatch",
+        )
+        return route_mismatch_response()
+
     return await proxy_to_agent(
         session_data["agent"],
         request,
         authenticated_username=session_data["username"],
+        app_name=requested_app,
     )
 
 

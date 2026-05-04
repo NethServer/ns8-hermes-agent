@@ -20,11 +20,17 @@ def reset_failed(service_name):
 for agent_id in list_known_agent_ids():
     service_name = f"hermes@{agent_id}.service"
     socket_service_name = f"hermes-socket@{agent_id}.service"
+    workspace_service_name = f"workspace@{agent_id}.service"
+    workspace_socket_service_name = f"workspace-socket@{agent_id}.service"
     was_active = run(["systemctl", "--user", "is-active", "--quiet", service_name]).returncode == 0
 
     if was_active:
+        run(["systemctl", "--user", "stop", workspace_socket_service_name], check=False)
+        run(["systemctl", "--user", "stop", workspace_service_name], check=False)
         run(["systemctl", "--user", "stop", socket_service_name], check=False)
         run(["systemctl", "--user", "stop", service_name], check=False)
+        reset_failed(workspace_socket_service_name)
+        reset_failed(workspace_service_name)
         reset_failed(socket_service_name)
         reset_failed(service_name)
 

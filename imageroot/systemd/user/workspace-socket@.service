@@ -1,0 +1,37 @@
+[Unit]
+Description=Hermes Workspace unix socket sidecar %i
+Requires=hermes-pod@%i.service workspace@%i.service
+After=hermes-pod@%i.service workspace@%i.service
+PartOf=workspace@%i.service
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=-%S/state/environment
+EnvironmentFile=-%S/state/agent_%i.env
+WorkingDirectory=%S/state
+Restart=on-failure
+KillMode=none
+Type=notify
+NotifyAccess=all
+ExecStartPre=/usr/bin/install -d -m 0770 %S/state/workspace-sockets
+ExecStartPre=-/usr/bin/rm -f %S/state/workspace-sockets/agent-%i.sock
+ExecStartPre=-/usr/bin/podman rm --force workspace-socket-%i
+ExecStart=runagent /usr/bin/podman run \
+		--name workspace-socket-%i \
+		--replace \
+		--rm \
+		--sdnotify=conmon \
+		--cgroups=no-conmon \
+		--pod hermes-pod-%i \
+		--volume %S/state/workspace-sockets:/sockets:z \
+		--tz=${TIMEZONE} \
+		${HERMES_AGENT_SOCKET_IMAGE} \
+		-d -d \
+		UNIX-LISTEN:/sockets/agent-%i.sock,fork,unlink-early,mode=0660 \
+		TCP-CONNECT:127.0.0.1:3000
+ExecStop=/usr/bin/podman stop --ignore --time 10 workspace-socket-%i
+ExecStopPost=-/usr/bin/podman rm --force workspace-socket-%i
+TimeoutStopSec=70
+
+[Install]
+WantedBy=default.target

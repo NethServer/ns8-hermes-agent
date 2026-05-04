@@ -1,13 +1,13 @@
 {
   "error": {
-    "403": "Vorgang nicht autorisiert",
-    "cannot_retrieve_installed_modules": "Fehler beim Abruf installierter Module",
     "401": "Authentifizierung fehlerhaft",
+    "403": "Vorgang nicht autorisiert",
+    "404": "Ressource nicht gefunden",
+    "cannot_retrieve_installed_modules": "Fehler beim Abruf installierter Module",
     "cannot_retrieve_module_info": "Fehler beim Abruf der Modul-Info",
     "generic_error": "Etwas ist schief gegangen",
     "error": "Fehler",
     "network_timeout": "Netzwerk-Zeitüberschreitung",
-    "404": "Ressource nicht gefunden",
     "network_error": "Netzwerk-Fehler",
     "validation_error": "Fehler bei der Validierung"
   },
@@ -67,7 +67,14 @@
     "actions": "Actions",
     "no_agents": "No agents configured",
     "start_agent": "Start",
-    "stop_agent": "Stop"
+    "stop_agent": "Stop",
+    "workspace_virtualhost": "Workspace virtualhost",
+    "workspace_virtualhost_placeholder": "Example: workspace.example.org",
+    "workspace_virtualhost_description": "When set, authenticated requests to https://<host>/ route to the assigned Hermes Workspace, and explicit /hermes-N/workspace paths stay available.",
+    "workspace_virtualhost_invalid": "Enter a valid fully qualified domain name or leave the field empty",
+    "workspace_virtualhost_duplicated": "Workspace virtualhost must be different from the dashboard virtualhost",
+    "workspace": "Workspace",
+    "workspace_not_configured": "Configure a workspace virtualhost to publish this workspace"
   },
   "common": {
     "required": "Erforderlich",

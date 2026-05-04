@@ -17,23 +17,24 @@ from hermes_agent_state import (
     TIMEZONE_DEFAULT,
     TIMEZONE_ENV,
     USER_DOMAIN_ENV,
+    WORKSPACE_VIRTUALHOST_ENV,
+    WORKSPACE_VIRTUALHOST_PREVIOUS_ENV,
     bool_to_env,
     env_to_bool,
+    normalize_virtualhost,
 )
 from hermes_user_domain import normalize_user_domain
 
 
-def normalize_base_virtualhost(value):
-    return (value or "").strip().lower()
-
-
 request = json.load(sys.stdin)
-current_base_virtualhost = normalize_base_virtualhost(os.getenv(BASE_VIRTUALHOST_ENV))
+current_base_virtualhost = normalize_virtualhost(os.getenv(BASE_VIRTUALHOST_ENV))
+current_workspace_virtualhost = normalize_virtualhost(os.getenv(WORKSPACE_VIRTUALHOST_ENV))
 current_lets_encrypt = env_to_bool(os.getenv(LETS_ENCRYPT_ENV))
 base_virtualhost_changed = False
+workspace_virtualhost_changed = False
 
 if "base_virtualhost" in request:
-    base_virtualhost = normalize_base_virtualhost(request.get("base_virtualhost"))
+    base_virtualhost = normalize_virtualhost(request.get("base_virtualhost"))
     base_virtualhost_changed = base_virtualhost != current_base_virtualhost
     # Keep the previous host only long enough for route reconciliation to
     # remove the old Traefik/TLS state after a host change.
@@ -47,6 +48,20 @@ if "base_virtualhost" in request:
         agent.unset_env(BASE_VIRTUALHOST_ENV)
 else:
     agent.unset_env(BASE_VIRTUALHOST_PREVIOUS_ENV)
+
+if "workspace_virtualhost" in request:
+    workspace_virtualhost = normalize_virtualhost(request.get("workspace_virtualhost"))
+    workspace_virtualhost_changed = workspace_virtualhost != current_workspace_virtualhost
+    if current_workspace_virtualhost and workspace_virtualhost != current_workspace_virtualhost:
+        agent.set_env(WORKSPACE_VIRTUALHOST_PREVIOUS_ENV, current_workspace_virtualhost)
+    else:
+        agent.unset_env(WORKSPACE_VIRTUALHOST_PREVIOUS_ENV)
+    if workspace_virtualhost:
+        agent.set_env(WORKSPACE_VIRTUALHOST_ENV, workspace_virtualhost)
+    else:
+        agent.unset_env(WORKSPACE_VIRTUALHOST_ENV)
+else:
+    agent.unset_env(WORKSPACE_VIRTUALHOST_PREVIOUS_ENV)
 
 if "user_domain" in request:
     user_domain = normalize_user_domain(request.get("user_domain"))
@@ -64,7 +79,7 @@ else:
 
 # Record the prior TLS mode when later steps must decide whether to clean up
 # certificates for a host that is being unpublished or downgraded.
-if current_lets_encrypt != lets_encrypt or (base_virtualhost_changed and current_lets_encrypt):
+if current_lets_encrypt != lets_encrypt or ((base_virtualhost_changed or workspace_virtualhost_changed) and current_lets_encrypt):
     agent.set_env(LETS_ENCRYPT_PREVIOUS_ENV, bool_to_env(current_lets_encrypt))
 else:
     agent.unset_env(LETS_ENCRYPT_PREVIOUS_ENV)

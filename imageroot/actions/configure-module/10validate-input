@@ -14,6 +14,7 @@ from hermes_agent_state import (
     BASE_VIRTUALHOST_PATTERN,
     MAX_AGENTS,
     NAME_PATTERN,
+    normalize_virtualhost,
 )
 from hermes_user_domain import (
     auth_required,
@@ -46,11 +47,31 @@ if not isinstance(request, dict):
     fail("(root)", "(root)", request, "invalid_request")
 
 if "base_virtualhost" in request:
-    base_virtualhost = (request.get("base_virtualhost") or "").strip().lower()
+    base_virtualhost = normalize_virtualhost(request.get("base_virtualhost"))
     if base_virtualhost and not BASE_VIRTUALHOST_PATTERN.fullmatch(base_virtualhost):
         fail("base_virtualhost", "base_virtualhost", request.get("base_virtualhost"), "base_virtualhost_invalid")
 else:
     base_virtualhost = ""
+
+if "workspace_virtualhost" in request:
+    workspace_virtualhost = normalize_virtualhost(request.get("workspace_virtualhost"))
+    if workspace_virtualhost and not BASE_VIRTUALHOST_PATTERN.fullmatch(workspace_virtualhost):
+        fail(
+            "workspace_virtualhost",
+            "workspace_virtualhost",
+            request.get("workspace_virtualhost"),
+            "workspace_virtualhost_invalid",
+        )
+else:
+    workspace_virtualhost = ""
+
+if base_virtualhost and workspace_virtualhost and base_virtualhost == workspace_virtualhost:
+    fail(
+        "workspace_virtualhost",
+        "workspace_virtualhost",
+        request.get("workspace_virtualhost"),
+        "workspace_virtualhost_duplicated",
+    )
 
 if "user_domain" in request and not isinstance(request.get("user_domain"), str):
     fail("user_domain", "user_domain", request.get("user_domain"), "user_domain_invalid")
@@ -64,7 +85,7 @@ agents = request.get("agents", [])
 seen_ids = set()
 seen_allowed_users = set()
 
-requires_auth = auth_required(base_virtualhost, agents)
+requires_auth = auth_required(base_virtualhost, agents, workspace_virtualhost)
 allowed_users = []
 
 for index, agent_data in enumerate(agents):

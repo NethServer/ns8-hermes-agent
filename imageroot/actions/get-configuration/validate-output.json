@@ -8,12 +8,16 @@
     "additionalProperties": false,
     "required": [
         "base_virtualhost",
+        "workspace_virtualhost",
         "user_domain",
         "lets_encrypt",
         "agents"
     ],
     "properties": {
         "base_virtualhost": {
+            "type": "string"
+        },
+        "workspace_virtualhost": {
             "type": "string"
         },
         "user_domain": {

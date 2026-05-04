@@ -1,7 +1,7 @@
 {
   "name": "hermes-agent",
   "description": {
-    "en": "Manage Hermes agents, shared dashboard TLS, and first-time home seeding on NethServer 8"
+    "en": "Manage Hermes agents, shared dashboard and workspace publishing, and first-time home seeding on NethServer 8"
   },
   "categories": [],
   "authors": [

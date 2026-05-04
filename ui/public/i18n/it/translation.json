@@ -76,19 +76,26 @@
     "actions": "Azioni",
     "no_agents": "Nessun agente configurato",
     "start_agent": "Start",
-    "stop_agent": "Stop"
+    "stop_agent": "Stop",
+    "workspace_virtualhost": "Workspace virtualhost",
+    "workspace_virtualhost_placeholder": "Example: workspace.example.org",
+    "workspace_virtualhost_description": "When set, authenticated requests to https://<host>/ route to the assigned Hermes Workspace, and explicit /hermes-N/workspace paths stay available.",
+    "workspace_virtualhost_invalid": "Enter a valid fully qualified domain name or leave the field empty",
+    "workspace_virtualhost_duplicated": "Workspace virtualhost must be different from the dashboard virtualhost",
+    "workspace": "Workspace",
+    "workspace_not_configured": "Configure a workspace virtualhost to publish this workspace"
   },
   "error": {
-    "error": "Errore",
+    "401": "Autenticazione non valida",
+    "403": "Operazione non autorizzata",
     "404": "Risorsa non trovata",
+    "error": "Errore",
     "validation_error": "Errore di validazione",
     "network_error": "Errore di rete",
     "cannot_retrieve_installed_modules": "Impossibile elencare moduli installati",
     "cannot_retrieve_module_info": "Impossibile recuperare info modulo",
     "network_timeout": "Timeout di rete",
-    "generic_error": "Qualcosa è andato storto",
-    "401": "Autenticazione non valida",
-    "403": "Operazione non autorizzata"
+    "generic_error": "Qualcosa è andato storto"
   },
   "action": {
     "configure-module": "Configura modulo",
