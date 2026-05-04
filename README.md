@@ -141,7 +141,7 @@ Build the module image, auth proxy image, Hermes wrapper image, Hermes Workspace
 bash build-images.sh
 ```
 
-The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.4.23`. The Hermes Workspace wrapper image is built from `ghcr.io/outsourc-e/hermes-workspace:latest` and adds a fixed `hermes` user with UID/GID `10000:10000` so both containers share the same logical runtime user.
+The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.4.30`. The Hermes Workspace wrapper image is built from `ghcr.io/outsourc-e/hermes-workspace:latest` and adds a fixed `hermes` user with UID/GID `10000:10000` so both containers share the same logical runtime user.
 
 The script uses:
 
