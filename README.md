@@ -118,7 +118,7 @@ Per-agent files:
 
 Per-agent Podman volume:
 
-- `hermes-agent-<id>-home`, mounted at `/opt/data`
+- `hermes-agent-<id>-home`, mounted at `/opt/data` for the Hermes gateway container; Hermes Workspace bind-mounts the volume's `home/` subdirectory at `/opt/data/home`
 - bootstrap-managed content inside the volume includes the seeded `SOUL.md` and `.env`; `config.yaml` plus the runtime directory skeleton are created later by the Hermes wrapper entrypoint before Hermes starts for the first time
 - ownership is repaired with the Hermes image's own `hermes` UID and GID during updates so image UID changes do not leave the volume unwritable before the enabled Hermes, workspace, relay, and shared auth services are restarted to pick up refreshed images
 
@@ -270,7 +270,7 @@ Each started agent runs:
 - one Hermes Workspace container: `workspace-<id>`
 - one dashboard socket relay container: `hermes-socket-<id>`
 - one workspace socket relay container: `workspace-socket-<id>`
-- one Podman-managed Hermes home volume mounted at `/opt/data`
+- one Podman-managed Hermes home volume mounted at `/opt/data` for Hermes, with Hermes Workspace bind-mounting that volume's `home/` subdirectory at `/opt/data/home`
 - one per-agent dashboard socket at `%S/state/dashboard-sockets/agent-<id>-dashboard.sock`, mounted into `hermes-auth` as `/dashboard-sockets/agent-<id>-dashboard.sock`
 - one per-agent workspace socket at `%S/state/workspace-sockets/agent-<id>.sock`, mounted into `hermes-auth` as `/workspace-sockets/agent-<id>.sock`
 
@@ -282,7 +282,7 @@ Shared publishing also runs:
 - one shared auth proxy service instance: `hermes-auth.service`
 - one shared auth proxy container: `hermes-auth`
 
-The Hermes container exposes its gateway API on `127.0.0.1:8642` and its dashboard on `127.0.0.1:9120` inside the pod. Hermes Workspace connects to those local endpoints with `HERMES_API_URL=http://127.0.0.1:8642`, `HERMES_DASHBOARD_URL=http://127.0.0.1:9120`, and the per-agent `API_SERVER_KEY` projected as both `HERMES_API_TOKEN` and `HERMES_DASHBOARD_TOKEN`.
+The Hermes container exposes its gateway API on `127.0.0.1:8642` and its dashboard on `127.0.0.1:9120` inside the pod. Hermes Workspace connects to those local endpoints with `HERMES_API_URL=http://127.0.0.1:8642` and `HERMES_DASHBOARD_URL=http://127.0.0.1:9120`, reuses the per-agent `API_SERVER_KEY` only for `HERMES_API_TOKEN`, relies on the dashboard session-token fallback instead of forcing `HERMES_DASHBOARD_TOKEN`, and mounts the agent home volume's `home/` subdirectory at `/opt/data/home` so the non-root workspace user gets a readable writable workspace path.
 
 The shared auth proxy mounts both socket directories, strips the `/hermes-<id>/dashboard` or `/hermes-<id>/workspace` prefix before proxying, forwards `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-For`, and `X-Forwarded-Prefix` for the workspace surface, derives the default app from the request host, and only publishes the shared listener.
 

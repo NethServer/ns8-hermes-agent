@@ -1759,7 +1759,10 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("HERMES_API_URL=http://127.0.0.1:8642", workspace_template)
         self.assertIn("HERMES_API_TOKEN=${API_SERVER_KEY}", workspace_template)
         self.assertIn("HERMES_DASHBOARD_URL=http://127.0.0.1:9120", workspace_template)
-        self.assertIn("HERMES_DASHBOARD_TOKEN=${API_SERVER_KEY}", workspace_template)
+        self.assertNotIn("HERMES_DASHBOARD_TOKEN=", workspace_template)
+        self.assertIn("--volume %h/.local/share/containers/storage/volumes/hermes-agent-%i-home/_data/home:/opt/data/home:z", workspace_template)
+        self.assertIn("HOME=/opt/data/home", workspace_template)
+        self.assertIn("HERMES_HOME=/opt/data/home", workspace_template)
 
         self.assertIn("Description=Hermes Workspace unix socket sidecar %i", workspace_socket_template)
         self.assertIn("Requires=hermes-pod@%i.service workspace@%i.service", workspace_socket_template)

@@ -32,7 +32,9 @@ ExecStart=runagent /usr/bin/podman run \
 		--env HERMES_API_URL=http://127.0.0.1:8642 \
 		--env HERMES_API_TOKEN=${API_SERVER_KEY} \
 		--env HERMES_DASHBOARD_URL=http://127.0.0.1:9120 \
-		--env HERMES_DASHBOARD_TOKEN=${API_SERVER_KEY} \
+		--env HOME=/opt/data/home \
+		--env HERMES_HOME=/opt/data/home \
+		--volume %h/.local/share/containers/storage/volumes/hermes-agent-%i-home/_data/home:/opt/data/home:z \
 		--tz=${TIMEZONE} \
 		${HERMES_AGENT_WORKSPACE_IMAGE}
 ExecStop=/usr/bin/podman stop --ignore --time 10 workspace-%i
