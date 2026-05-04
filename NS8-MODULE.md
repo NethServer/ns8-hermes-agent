@@ -27,9 +27,9 @@ The module publishes or references:
 - `ghcr.io/nethserver/hermes-agent-auth`: the shared auth proxy image for Hermes dashboard and Hermes Workspace publishing
 - `ghcr.io/nethserver/hermes-agent-hermes`: the Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.4.23`
 - `ghcr.io/nethserver/hermes-agent-socket`: the per-agent dashboard and workspace socket relay image
-- `ghcr.io/outsourc-e/hermes-workspace:latest`: the per-agent Hermes Workspace image referenced by `HERMES_AGENT_WORKSPACE_IMAGE`
+- `ghcr.io/nethserver/hermes-agent-workspace`: the per-agent Hermes Workspace wrapper image built from `ghcr.io/outsourc-e/hermes-workspace:latest` and referenced by `HERMES_AGENT_WORKSPACE_IMAGE`
 
-`build-images.sh` builds the local module, auth proxy, Hermes wrapper, and socket relay images, and records the workspace image reference in `org.nethserver.images`.
+`build-images.sh` builds the local module, auth proxy, Hermes wrapper, Hermes Workspace wrapper, and socket relay images, and records them in `org.nethserver.images`.
 
 The module image reserves one TCP port and declares `cluster:accountconsumer traefik@node:routeadm node:portsadm` authorizations so it can bind one NS8 user domain and publish shared auth routes for the dashboard and workspace hosts through one listener.
 
@@ -128,7 +128,7 @@ Per-agent state files:
 
 Per-agent Podman volume:
 
-- `hermes-agent-<id>-home`, mounted at `/opt/data` for Hermes; Hermes Workspace bind-mounts the volume's `home/` subdirectory at `/opt/data/home`
+- `hermes-agent-<id>-home`, mounted at `/opt/data` for both Hermes and Hermes Workspace
 - bootstrap-managed content inside the volume includes the seeded `SOUL.md` and `.env`; `config.yaml` plus the runtime directory skeleton are created later by the Hermes wrapper entrypoint before Hermes starts for the first time
 - ownership is repaired by a one-shot root helper from the configured Hermes image so `/opt/data` matches that image's dynamic `hermes` UID and GID rather than a hardcoded UID
 
@@ -184,7 +184,7 @@ For agent `1`, the runtime looks like:
 - Hermes Workspace container: `workspace-1`
 - dashboard socket relay container: `hermes-socket-1`
 - workspace socket relay container: `workspace-socket-1`
-- Hermes home named volume: `hermes-agent-1-home` mounted at `/opt/data` for `hermes-1`, with `workspace-1` bind-mounting that volume's `home/` subdirectory at `/opt/data/home`
+- Hermes home named volume: `hermes-agent-1-home` mounted at `/opt/data` for both `hermes-1` and `workspace-1`
 - shared auth listener: `127.0.0.1:${TCP_PORT}` forwarded to auth proxy port `9119`
 - dashboard socket: `%S/state/dashboard-sockets/agent-1-dashboard.sock`, mounted into the auth container as `/dashboard-sockets/agent-1-dashboard.sock`
 - workspace socket: `%S/state/workspace-sockets/agent-1.sock`, mounted into the auth container as `/workspace-sockets/agent-1.sock`
@@ -197,7 +197,7 @@ During module updates, `update-module.d/30ensure-agent-home-ownership` best-effo
 
 Managed `SOUL.md` and the default Hermes home `.env` are seeded in `configure-module/75seed-agent-home` before `hermes@<id>.service` starts. Later configure runs preserve existing files inside the volume.
 
-The Hermes container runs the gateway and exposes its local API on `127.0.0.1:8642` inside the pod. `hermes-socket@.service` joins the same pod and relays the Hermes dashboard on `127.0.0.1:9120` onto `%S/state/dashboard-sockets/agent-<id>-dashboard.sock`. `workspace@.service` joins the same pod, runs Hermes Workspace on `127.0.0.1:3000`, consumes `HERMES_API_URL=http://127.0.0.1:8642`, `HERMES_API_TOKEN=${API_SERVER_KEY}`, and `HERMES_DASHBOARD_URL=http://127.0.0.1:9120`, relies on the dashboard session-token fallback instead of forcing `HERMES_DASHBOARD_TOKEN`, and mounts the per-agent volume's `home/` subdirectory at `/opt/data/home` for the workspace user. `workspace-socket@.service` relays Hermes Workspace onto `%S/state/workspace-sockets/agent-<id>.sock`.
+The Hermes container runs the gateway and exposes its local API on `127.0.0.1:8642` inside the pod. `hermes-socket@.service` joins the same pod and relays the Hermes dashboard on `127.0.0.1:9120` onto `%S/state/dashboard-sockets/agent-<id>-dashboard.sock`. `workspace@.service` joins the same pod, runs Hermes Workspace on `127.0.0.1:3000`, consumes `HERMES_API_URL=http://127.0.0.1:8642`, `HERMES_API_TOKEN=${API_SERVER_KEY}`, and `HERMES_DASHBOARD_URL=http://127.0.0.1:9120`, relies on the dashboard session-token fallback instead of forcing `HERMES_DASHBOARD_TOKEN`, mounts the same per-agent volume at `/opt/data`, stores Workspace state under `HERMES_HOME=/opt/data/.hermes`, and exposes user-editable files from `HERMES_WORKSPACE_DIR=/opt/data/workspace`. `workspace-socket@.service` relays Hermes Workspace onto `%S/state/workspace-sockets/agent-<id>.sock`.
 
 The shared auth service mounts both socket directories, listens on `9119`, authenticates access against the shared `user_domain` plus the generated `authproxy_agents.json` registry, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, proxies `/hermes-<id>/dashboard` and `/hermes-<id>/workspace` to the matching per-agent socket, keeps `/hermes-<id>/` as the auth-owned landing page, defaults the host root to the assigned dashboard or workspace based on the request host, and returns HTTP 404 for requests to the removed legacy browser alias.
 

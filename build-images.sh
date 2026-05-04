@@ -39,7 +39,7 @@ component_images=(
     "${repobase}/hermes-agent-auth:${imagetag}"
     "${repobase}/hermes-agent-hermes:${imagetag}"
     "${repobase}/hermes-agent-socket:${imagetag}"
-    "${HERMES_AGENT_WORKSPACE_IMAGE:-ghcr.io/outsourc-e/hermes-workspace:latest}"
+    "${HERMES_AGENT_WORKSPACE_IMAGE:-${repobase}/hermes-agent-workspace:${imagetag}}"
 )
 
 # Create a new empty container image
@@ -61,6 +61,7 @@ buildah run \
 build_component_image "hermes-agent-auth" "containers/auth"
 build_component_image "hermes-agent-hermes" "containers/hermes"
 build_component_image "hermes-agent-socket" "containers/socket"
+build_component_image "hermes-agent-workspace" "containers/workspace"
 
 # Add imageroot directory to the container image
 buildah add "${container}" imageroot /imageroot

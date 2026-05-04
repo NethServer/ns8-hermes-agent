@@ -118,7 +118,7 @@ Per-agent files:
 
 Per-agent Podman volume:
 
-- `hermes-agent-<id>-home`, mounted at `/opt/data` for the Hermes gateway container; Hermes Workspace bind-mounts the volume's `home/` subdirectory at `/opt/data/home`
+- `hermes-agent-<id>-home`, mounted at `/opt/data` for both the Hermes gateway container and the Hermes Workspace container
 - bootstrap-managed content inside the volume includes the seeded `SOUL.md` and `.env`; `config.yaml` plus the runtime directory skeleton are created later by the Hermes wrapper entrypoint before Hermes starts for the first time
 - ownership is repaired with the Hermes image's own `hermes` UID and GID during updates so image UID changes do not leave the volume unwritable before the enabled Hermes, workspace, relay, and shared auth services are restarted to pick up refreshed images
 
@@ -127,7 +127,7 @@ Operator-visible runtime names are `hermes-pod@.service` for the per-agent pod o
 ## Repository layout
 
 - `imageroot/`: NS8 actions, helper scripts, templates, event handler, state helper module, and the user systemd units.
-- `containers/`: the Hermes wrapper image sources, the shared auth proxy image for dashboard and workspace publishing, and the generic socket relay image. Hermes Workspace is consumed as an external image at runtime.
+- `containers/`: the Hermes wrapper image sources, the shared auth proxy image for dashboard and workspace publishing, the Hermes Workspace wrapper image, and the generic socket relay image.
 - `ui/`: embedded Vue 2 admin UI.
 - `tests/`: Robot Framework integration checks and focused Python unit tests.
 
@@ -135,19 +135,19 @@ See `STRUCTURE.md` for a file map.
 
 ## Build
 
-Build the module image, auth proxy image, Hermes wrapper image, and socket relay image with:
+Build the module image, auth proxy image, Hermes wrapper image, Hermes Workspace wrapper image, and socket relay image with:
 
 ```bash
 bash build-images.sh
 ```
 
-The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.4.23`. Hermes Workspace is not wrapped locally; the module uses `ghcr.io/outsourc-e/hermes-workspace:latest` by default through `HERMES_AGENT_WORKSPACE_IMAGE`.
+The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.4.23`. The Hermes Workspace wrapper image is built from `ghcr.io/outsourc-e/hermes-workspace:latest` and adds a fixed `hermes` user with UID/GID `10000:10000` so both containers share the same logical runtime user.
 
 The script uses:
 
 - `REPOBASE`, default `ghcr.io/nethserver`
 - `IMAGETAG`, default `latest`
-- `HERMES_AGENT_WORKSPACE_IMAGE`, default `ghcr.io/outsourc-e/hermes-workspace:latest`
+- `HERMES_AGENT_WORKSPACE_IMAGE`, default `${REPOBASE:-ghcr.io/nethserver}/hermes-agent-workspace:${IMAGETAG:-latest}` in `build-images.sh` and `ghcr.io/nethserver/hermes-agent-workspace:latest` in the checked-in service template
 
 ## Install
 
@@ -270,7 +270,7 @@ Each started agent runs:
 - one Hermes Workspace container: `workspace-<id>`
 - one dashboard socket relay container: `hermes-socket-<id>`
 - one workspace socket relay container: `workspace-socket-<id>`
-- one Podman-managed Hermes home volume mounted at `/opt/data` for Hermes, with Hermes Workspace bind-mounting that volume's `home/` subdirectory at `/opt/data/home`
+- one Podman-managed Hermes home volume mounted at `/opt/data` for both Hermes and Hermes Workspace
 - one per-agent dashboard socket at `%S/state/dashboard-sockets/agent-<id>-dashboard.sock`, mounted into `hermes-auth` as `/dashboard-sockets/agent-<id>-dashboard.sock`
 - one per-agent workspace socket at `%S/state/workspace-sockets/agent-<id>.sock`, mounted into `hermes-auth` as `/workspace-sockets/agent-<id>.sock`
 
@@ -282,7 +282,7 @@ Shared publishing also runs:
 - one shared auth proxy service instance: `hermes-auth.service`
 - one shared auth proxy container: `hermes-auth`
 
-The Hermes container exposes its gateway API on `127.0.0.1:8642` and its dashboard on `127.0.0.1:9120` inside the pod. Hermes Workspace connects to those local endpoints with `HERMES_API_URL=http://127.0.0.1:8642` and `HERMES_DASHBOARD_URL=http://127.0.0.1:9120`, reuses the per-agent `API_SERVER_KEY` only for `HERMES_API_TOKEN`, relies on the dashboard session-token fallback instead of forcing `HERMES_DASHBOARD_TOKEN`, and mounts the agent home volume's `home/` subdirectory at `/opt/data/home` so the non-root workspace user gets a readable writable workspace path.
+The Hermes container exposes its gateway API on `127.0.0.1:8642` and its dashboard on `127.0.0.1:9120` inside the pod. Hermes Workspace connects to those local endpoints with `HERMES_API_URL=http://127.0.0.1:8642` and `HERMES_DASHBOARD_URL=http://127.0.0.1:9120`, reuses the per-agent `API_SERVER_KEY` only for `HERMES_API_TOKEN`, relies on the dashboard session-token fallback instead of forcing `HERMES_DASHBOARD_TOKEN`, mounts the same per-agent volume at `/opt/data`, stores Hermes Workspace state under `HERMES_HOME=/opt/data/.hermes`, and serves user-browsable files from `HERMES_WORKSPACE_DIR=/opt/data/workspace`.
 
 The shared auth proxy mounts both socket directories, strips the `/hermes-<id>/dashboard` or `/hermes-<id>/workspace` prefix before proxying, forwards `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-For`, and `X-Forwarded-Prefix` for the workspace surface, derives the default app from the request host, and only publishes the shared listener.
 
