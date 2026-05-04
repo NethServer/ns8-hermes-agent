@@ -29,10 +29,11 @@ WORKSPACE_SOCKET_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user"
 AUTH_CONTAINERFILE_PATH = ROOT / "containers" / "auth" / "Containerfile"
 HERMES_CONTAINERFILE_PATH = ROOT / "containers" / "hermes" / "Containerfile"
 SOCKET_CONTAINERFILE_PATH = ROOT / "containers" / "socket" / "Containerfile"
+WORKSPACE_CONTAINERFILE_PATH = ROOT / "containers" / "workspace" / "Containerfile"
 HERMES_ENTRYPOINT_PATH = ROOT / "containers" / "hermes" / "entrypoint.sh"
 HERMES_DASHBOARD_PATCH_PATH = ROOT / "containers" / "hermes" / "patch_dashboard_source.py"
 BUILD_IMAGES_PATH = ROOT / "build-images.sh"
-WORKSPACE_IMAGE = "ghcr.io/outsourc-e/hermes-workspace:latest"
+WORKSPACE_IMAGE = "ghcr.io/nethserver/hermes-agent-workspace:latest"
 CREATE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "create-module"
 CONFIGURE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "configure-module"
 DESTROY_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "destroy-module"
@@ -1747,7 +1748,7 @@ class HermesModuleStateTest(unittest.TestCase):
 
         self.assertIn("Description=Hermes Workspace sidecar %i", workspace_template)
         self.assertIn("Requires=hermes-pod@%i.service hermes@%i.service", workspace_template)
-        self.assertIn("Environment=HERMES_AGENT_WORKSPACE_IMAGE=ghcr.io/outsourc-e/hermes-workspace:latest", workspace_template)
+        self.assertIn("Environment=HERMES_AGENT_WORKSPACE_IMAGE=ghcr.io/nethserver/hermes-agent-workspace:latest", workspace_template)
         self.assertIn("EnvironmentFile=-%S/state/agent_%i_secrets.env", workspace_template)
         self.assertIn("--name workspace-%i", workspace_template)
         self.assertIn("--pod hermes-pod-%i", workspace_template)
@@ -1760,9 +1761,10 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("HERMES_API_TOKEN=${API_SERVER_KEY}", workspace_template)
         self.assertIn("HERMES_DASHBOARD_URL=http://127.0.0.1:9120", workspace_template)
         self.assertNotIn("HERMES_DASHBOARD_TOKEN=", workspace_template)
-        self.assertIn("--volume %h/.local/share/containers/storage/volumes/hermes-agent-%i-home/_data/home:/opt/data/home:z", workspace_template)
-        self.assertIn("HOME=/opt/data/home", workspace_template)
-        self.assertIn("HERMES_HOME=/opt/data/home", workspace_template)
+        self.assertIn("--volume hermes-agent-%i-home:/opt/data:z", workspace_template)
+        self.assertIn("HOME=/opt/data", workspace_template)
+        self.assertIn("HERMES_HOME=/opt/data/.hermes", workspace_template)
+        self.assertIn("HERMES_WORKSPACE_DIR=/opt/data/workspace", workspace_template)
 
         self.assertIn("Description=Hermes Workspace unix socket sidecar %i", workspace_socket_template)
         self.assertIn("Requires=hermes-pod@%i.service workspace@%i.service", workspace_socket_template)
@@ -1799,13 +1801,23 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("apk add --no-cache socat", containerfile)
         self.assertIn('ENTRYPOINT ["/usr/bin/socat"]', containerfile)
 
+    def test_workspace_containerfile_aligns_runtime_user_with_hermes(self):
+        containerfile = WORKSPACE_CONTAINERFILE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("FROM ghcr.io/outsourc-e/hermes-workspace:latest", containerfile)
+        self.assertIn('org.opencontainers.image.title="hermes-agent-workspace"', containerfile)
+        self.assertIn("groupadd --gid 10000 hermes", containerfile)
+        self.assertIn("useradd --uid 10000 --gid 10000 --home-dir /opt/data --create-home hermes", containerfile)
+        self.assertIn("install -d -o hermes -g hermes /opt/data /opt/data/.hermes /opt/data/workspace", containerfile)
+        self.assertIn("USER hermes", containerfile)
+
     def test_build_images_script_publishes_socket_image_and_one_tcp_port(self):
         build_script = BUILD_IMAGES_PATH.read_text(encoding="utf-8")
 
         self.assertIn('"${repobase}/hermes-agent-socket:${imagetag}"', build_script)
-        self.assertIn('"${HERMES_AGENT_WORKSPACE_IMAGE:-ghcr.io/outsourc-e/hermes-workspace:latest}"', build_script)
+        self.assertIn('"${HERMES_AGENT_WORKSPACE_IMAGE:-${repobase}/hermes-agent-workspace:${imagetag}}"', build_script)
         self.assertIn('build_component_image "hermes-agent-socket" "containers/socket"', build_script)
-        self.assertNotIn('build_component_image "hermes-agent-workspace"', build_script)
+        self.assertIn('build_component_image "hermes-agent-workspace" "containers/workspace"', build_script)
         self.assertIn('--label="org.nethserver.tcp-ports-demand=1"', build_script)
 
     def test_hermes_entrypoint_keeps_absolute_virtualenv_activation(self):

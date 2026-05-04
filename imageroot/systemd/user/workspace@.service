@@ -5,7 +5,7 @@ After=hermes-pod@%i.service hermes@%i.service
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
-Environment=HERMES_AGENT_WORKSPACE_IMAGE=ghcr.io/outsourc-e/hermes-workspace:latest
+Environment=HERMES_AGENT_WORKSPACE_IMAGE=ghcr.io/nethserver/hermes-agent-workspace:latest
 EnvironmentFile=-%S/state/environment
 EnvironmentFile=-%S/state/agent_%i.env
 EnvironmentFile=-%S/state/agent_%i_secrets.env
@@ -32,9 +32,10 @@ ExecStart=runagent /usr/bin/podman run \
 		--env HERMES_API_URL=http://127.0.0.1:8642 \
 		--env HERMES_API_TOKEN=${API_SERVER_KEY} \
 		--env HERMES_DASHBOARD_URL=http://127.0.0.1:9120 \
-		--env HOME=/opt/data/home \
-		--env HERMES_HOME=/opt/data/home \
-		--volume %h/.local/share/containers/storage/volumes/hermes-agent-%i-home/_data/home:/opt/data/home:z \
+		--env HOME=/opt/data \
+		--env HERMES_HOME=/opt/data/.hermes \
+		--env HERMES_WORKSPACE_DIR=/opt/data/workspace \
+		--volume hermes-agent-%i-home:/opt/data:z \
 		--tz=${TIMEZONE} \
 		${HERMES_AGENT_WORKSPACE_IMAGE}
 ExecStop=/usr/bin/podman stop --ignore --time 10 workspace-%i

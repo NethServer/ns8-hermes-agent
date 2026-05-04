@@ -10,7 +10,7 @@ This document maps the current checked-in layout.
 - `NS8-MODULE.md`: implementation-oriented NS8 lifecycle notes.
 - `NS8_RESOURCE_MAP.md`: NS8 reference index.
 - `HERMES_RESOURCE_MAP.md`: Hermes reference index.
-- `build-images.sh`: builds the module image plus the local auth proxy, Hermes wrapper, and socket relay component images, and records the external Hermes Workspace image reference in `org.nethserver.images`.
+- `build-images.sh`: builds the module image plus the local auth proxy, Hermes wrapper, Hermes Workspace wrapper, and socket relay component images, and records them in `org.nethserver.images`.
 - `test-module.sh`: runs the module test suite.
 - `renovate.json`: Renovate configuration.
 
@@ -75,7 +75,7 @@ This document maps the current checked-in layout.
 ### `imageroot/systemd/user/`
 
 - `hermes@.service`: per-agent Hermes gateway service with the local API server enabled.
-- `workspace@.service`: per-agent Hermes Workspace sidecar wired to the local Hermes gateway and dashboard, using the generated per-agent API token, dashboard session-token fallback, and a bind mount of the agent volume's `home/` subdirectory at `/opt/data/home`.
+- `workspace@.service`: per-agent Hermes Workspace sidecar wired to the local Hermes gateway and dashboard, using the generated per-agent API token, dashboard session-token fallback, the standard `/opt/data` named-volume mount, `HERMES_HOME=/opt/data/.hermes` for Workspace state, and `HERMES_WORKSPACE_DIR=/opt/data/workspace` for user files.
 - `hermes-socket@.service`: per-agent dashboard socket relay sidecar that exposes the Hermes dashboard over a Unix socket.
 - `workspace-socket@.service`: per-agent workspace socket relay sidecar that exposes Hermes Workspace over a Unix socket.
 - `hermes-auth.service`: shared authentication proxy service for the shared dashboard and workspace virtualhosts.
@@ -92,6 +92,7 @@ This document maps the current checked-in layout.
 - `containers/auth/authproxy.py`: FastAPI auth proxy that authenticates the shared dashboard or workspace virtualhost against LDAP, issues a host-wide session cookie, preserves the dashboard upstream `Authorization` header, replaces any inbound `X-Hermes-Authenticated-User` value with a trusted value derived from the authenticated session username, logs auth attempts and outcomes to stdout, chooses the default app from the request host, and proxies authenticated sessions to either the Hermes dashboard or Hermes Workspace upstream from `authproxy_agents.json`, using dedicated dashboard/workspace socket records.
 - `containers/hermes/Containerfile`: Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.4.23`.
 - `containers/hermes/entrypoint.sh`: wrapper entrypoint that bootstraps the Hermes home volume, exports the bundled `web_dist` when present, and can run the Hermes dashboard and gateway together inside one container.
+- `containers/workspace/Containerfile`: Hermes Workspace wrapper image built from `ghcr.io/outsourc-e/hermes-workspace:latest` and aligned to the Hermes `hermes` UID/GID.
 - `containers/socket/Containerfile`: minimal Alpine-based socket relay image that runs `socat` for the per-agent dashboard and workspace sidecars.
 
 ## `ui/`
