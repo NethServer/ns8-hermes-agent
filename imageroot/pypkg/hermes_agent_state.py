@@ -7,13 +7,16 @@ from pathlib import Path
 
 
 ENVIRONMENT_FILE = Path("environment")
-SHARED_SECRETS_ENVFILE = Path("secrets.env")
+SECRETS_DIR = Path("secrets")
+SHARED_SECRETS_ENVFILE = SECRETS_DIR / "shared.env"
 AUTHPROXY_ENVFILE = Path("authproxy.env")
 AUTHPROXY_SECRETS_ENVFILE = Path("authproxy_secrets.env")
 AUTHPROXY_AGENTS_FILE = Path("authproxy_agents.json")
 AGENTS_DIR = Path("agents")
+AGENTS_HOME_VOLUME = "hermes-agents-home"
 AGENT_DASHBOARD_SOCKETS_DIR = Path("dashboard-sockets")
 AUTHPROXY_SOCKET_MOUNT_DIR = "/sockets"
+AGENT_PUBLIC_ENVFILE = "agent.env"
 SOUL_TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates" / "SOUL"
 MAX_AGENTS = 30
 
@@ -30,8 +33,7 @@ ALLOWED_ROLES = (
 ALLOWED_STATUSES = ("start", "stop")
 NAME_PATTERN = re.compile(r"^[A-Za-z ]+$")
 AGENT_DIR_PATTERN = re.compile(r"^\d+$")
-AGENT_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)\.env$")
-AGENT_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)_secrets\.env$")
+AGENT_SECRETS_ENVFILE_PATTERN = re.compile(r"^(\d+)\.env$")
 AGENT_SECRET_KEY = "HERMES_AGENT_SECRET"
 AUTH_SESSION_SECRET_KEY = "HERMES_AUTH_SESSION_SECRET"
 SMTP_PUBLIC_KEYS = (
@@ -238,16 +240,16 @@ def list_known_agent_ids():
         if 1 <= agent_id <= MAX_AGENTS:
             ids.add(agent_id)
 
-    # Union metadata directories with generated env files so cleanup steps still
-    # see IDs that were only partially removed by an earlier failed run.
+    # Union metadata directories with secrets files so cleanup steps still see
+    # IDs that were only partially removed by an earlier failed run.
     if AGENTS_DIR.exists():
         for path in AGENTS_DIR.iterdir():
             if path.is_dir() and AGENT_DIR_PATTERN.fullmatch(path.name):
                 record_agent_id(path.name)
 
-    for path in Path(".").iterdir():
-        for pattern in (AGENT_ENVFILE_PATTERN, AGENT_SECRETS_ENVFILE_PATTERN):
-            match = pattern.fullmatch(path.name)
+    if SECRETS_DIR.exists():
+        for path in SECRETS_DIR.iterdir():
+            match = AGENT_SECRETS_ENVFILE_PATTERN.fullmatch(path.name)
             if match:
                 record_agent_id(match.group(1))
 

@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+# Migrate per-agent volumes (hermes-agent-{id}-home) into the shared
+# hermes-agents-home volume under /opt/agents/{id}/.  Idempotent: if the
+# old volume no longer exists the step is silently skipped for that agent.
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
+
+from hermes_agent_state import AGENTS_HOME_VOLUME, list_known_agent_ids
+
+
+def run(command, **kwargs):
+    return subprocess.run(command, **kwargs)
+
+
+def volume_exists(name):
+    return run(["podman", "volume", "exists", name], check=False).returncode == 0
+
+
+def migrate_agent_volume(agent_id, image):
+    old_volume = f"hermes-agent-{agent_id}-home"
+    if not volume_exists(old_volume):
+        return
+
+    print(f"Migrating {old_volume} → {AGENTS_HOME_VOLUME}:/opt/agents/{agent_id}", flush=True)
+    run(
+        [
+            "podman", "run",
+            "--rm",
+            "--replace",
+            "--name", f"hermes-agent-migrate-{agent_id}",
+            "--network=none",
+            "--user", "root",
+            "--entrypoint", "/bin/sh",
+            "--volume", f"{old_volume}:/opt/src:ro,z",
+            "--volume", f"{AGENTS_HOME_VOLUME}:/opt/agents:z",
+            image,
+            "-eu", "-c",
+            f"mkdir -p /opt/agents/{agent_id} && cp -a /opt/src/. /opt/agents/{agent_id}/",
+        ],
+        check=True,
+    )
+
+    run(["podman", "volume", "rm", "--force", old_volume], check=True)
+
+
+image = os.environ.get("HERMES_AGENT_HERMES_IMAGE")
+if not image:
+    print("HERMES_AGENT_HERMES_IMAGE is not set, skipping volume migration", file=sys.stderr)
+    sys.exit(1)
+
+for agent_id in list_known_agent_ids():
+    migrate_agent_volume(agent_id, image)

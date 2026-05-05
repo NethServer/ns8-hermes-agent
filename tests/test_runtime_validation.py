@@ -33,9 +33,13 @@ BUILD_IMAGES_PATH = ROOT / "build-images.sh"
 CREATE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "create-module"
 CONFIGURE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "configure-module"
 DESTROY_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "destroy-module"
+RESTORE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "restore-module"
 UPDATE_MODULE_SCRIPT_DIR = ROOT / "imageroot" / "update-module.d"
 PERSIST_SHARED_ENV_PATH = CONFIGURE_MODULE_ACTION_DIR / "20persist-shared-env"
 SEED_AGENT_HOME_ACTION_PATH = CONFIGURE_MODULE_ACTION_DIR / "75seed-agent-home"
+RESTORE_COPY_ENV_PATH = RESTORE_MODULE_ACTION_DIR / "06copyenv"
+RESTORE_CONFIGURE_PATH = RESTORE_MODULE_ACTION_DIR / "20configure"
+STATE_INCLUDE_PATH = ROOT / "imageroot" / "etc" / "state-include.conf"
 UPDATE_OWNERSHIP_SCRIPT_PATH = UPDATE_MODULE_SCRIPT_DIR / "30ensure-agent-home-ownership"
 UPDATE_RESTART_SCRIPT_PATH = UPDATE_MODULE_SCRIPT_DIR / "80restart"
 RECONCILE_DESIRED_ROUTES_PATH = CONFIGURE_MODULE_ACTION_DIR / "90reconcile-desired-routes"
@@ -72,6 +76,7 @@ def working_directory(path):
 
 def write_envfile(path, env_data):
     file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
     content = "\n".join(f"{key}={value}" for key, value in env_data.items())
     if content:
         content = f"{content}\n"
@@ -258,18 +263,14 @@ def mocked_ldap_modules(domains=None, users_by_domain=None):
 
 def run_seed_script(script, data_dir, agent_id, agent_name, agent_role):
     subprocess.run(
-        [
-            "/bin/sh",
-            "-eu",
-            "-c",
-            script,
-        ],
+        ["/bin/sh", "-eu", "-c", script],
         check=True,
         env={
             **os.environ,
             "AGENT_ID": str(agent_id),
             "AGENT_NAME": agent_name,
             "AGENT_ROLE": agent_role,
+            "HERMES_HOME": str(data_dir),
         },
     )
 
@@ -957,7 +958,8 @@ class HermesModuleStateTest(unittest.TestCase):
             ), mock.patch("subprocess.run") as run_command:
                 run_action(CREATE_MODULE_ACTION_DIR)
                 self.assertTrue(Path(temp_dir, "agents").is_dir())
-                self.assertTrue(Path(temp_dir, "secrets.env").is_file())
+                self.assertTrue(Path(temp_dir, "secrets").is_dir())
+                self.assertTrue(Path(temp_dir, "secrets", "shared.env").is_file())
         finally:
             if original_agent is not None:
                 sys.modules["agent"] = original_agent
@@ -1010,11 +1012,11 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertNotIn("hermes-auth@%i.service", service_template)
         self.assertIn("--pod hermes-pod-%i", service_template)
         self.assertIn("--name hermes-%i", service_template)
-        self.assertIn("--volume hermes-agent-%i-home:/opt/data", service_template)
+        self.assertIn("--volume hermes-agents-home:/opt/agents:z", service_template)
         self.assertNotIn("--volume %S/state/agents/%i/home:/opt/data:Z", service_template)
-        self.assertIn("--env-file %S/state/agent_%i.env", service_template)
+        self.assertIn("--env-file %S/state/agents/%i/agent.env", service_template)
         self.assertNotIn("ensure-agent-home-ownership --agent-id %i", service_template)
-        self.assertIn("--env-file %S/state/agent_%i_secrets.env", service_template)
+        self.assertIn("--env-file %S/state/secrets/%i.env", service_template)
         self.assertIn("API_SERVER_ENABLED=true", service_template)
         self.assertIn("gateway run", service_template)
         self.assertNotIn("seed-agent-home", service_template)
@@ -1143,11 +1145,14 @@ class HermesModuleStateTest(unittest.TestCase):
 
     def test_write_private_textfile_rejects_symlink_target(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            agent_dir = Path("agents") / "5"
+            agent_dir.mkdir(parents=True)
+            target_path = agent_dir / "agent.env"
             Path("outside.env").write_text("SAFE=1\n", encoding="utf-8")
-            os.symlink("outside.env", Path("agent_5.env"))
+            os.symlink(Path(temp_dir) / "outside.env", target_path)
 
             with self.assertRaisesRegex(ValueError, "unsafe file path"):
-                self.state.write_private_textfile(Path("agent_5.env"), "AGENT_NAME=Blocked\n")
+                self.state.write_private_textfile(target_path, "AGENT_NAME=Blocked\n")
 
             self.assertEqual(Path("outside.env").read_text(encoding="utf-8"), "SAFE=1\n")
 
@@ -1200,8 +1205,8 @@ class HermesModuleStateTest(unittest.TestCase):
             ):
                 self.sync.sync_agent_runtime_files()
 
-            public_env = read_envfile(Path("agent_1.env"))
-            agent_secrets = read_envfile(Path("agent_1_secrets.env"))
+            public_env = read_envfile(Path("agents") / "1" / "agent.env")
+            agent_secrets = read_envfile(self.state.SECRETS_DIR / "1.env")
             authproxy_env = read_envfile(Path("authproxy.env"))
             authproxy_secrets = read_envfile(Path("authproxy_secrets.env"))
             authproxy_agents = json.loads(Path("authproxy_agents.json").read_text(encoding="utf-8"))
@@ -1224,6 +1229,7 @@ class HermesModuleStateTest(unittest.TestCase):
                     "AGENT_NAME",
                     "AGENT_ROLE",
                     "BASE_VIRTUALHOST",
+                    "HERMES_HOME",
                     "LDAP_BASE_DN",
                     "LDAP_HOST",
                     "LDAP_PORT",
@@ -1263,10 +1269,8 @@ class HermesModuleStateTest(unittest.TestCase):
             )
             self.assertEqual(shared_secrets["SMTP_PASSWORD"], "secret-pass")
             self.assertTrue(shared_secrets["HERMES_AUTH_SESSION_SECRET"])
-            self.assertEqual(
-                sorted(path.name for path in Path(".").glob("agent_1*.env")),
-                ["agent_1.env", "agent_1_secrets.env"],
-            )
+            self.assertTrue((Path("agents") / "1" / "agent.env").is_file())
+            self.assertTrue((self.state.SECRETS_DIR / "1.env").is_file())
             self.assertFalse((Path("agents") / "1" / "home").exists())
 
     def test_sync_agent_runtime_files_creates_missing_agent_secrets_envfile(self):
@@ -1303,8 +1307,8 @@ class HermesModuleStateTest(unittest.TestCase):
             ):
                 self.sync.sync_agent_runtime_files(agent_id=1)
 
-            public_env = read_envfile(Path("agent_1.env"))
-            agent_secrets = read_envfile(Path("agent_1_secrets.env"))
+            public_env = read_envfile(Path("agents") / "1" / "agent.env")
+            agent_secrets = read_envfile(self.state.SECRETS_DIR / "1.env")
 
             self.assertEqual(public_env["AGENT_NAME"], "Alice User")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "secret-pass")
@@ -1341,12 +1345,12 @@ class HermesModuleStateTest(unittest.TestCase):
                 create=True,
             ):
                 self.sync.sync_agent_runtime_files(agent_id=3)
-                first_sync_secrets = read_envfile(Path("agent_3_secrets.env"))
+                first_sync_secrets = read_envfile(self.state.SECRETS_DIR / "3.env")
 
                 write_envfile(self.state.SHARED_SECRETS_ENVFILE, {"SMTP_PASSWORD": "new-pass"})
                 self.sync.sync_agent_runtime_files(agent_id=3)
 
-            agent_secrets = read_envfile(Path("agent_3_secrets.env"))
+            agent_secrets = read_envfile(self.state.SECRETS_DIR / "3.env")
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], first_sync_secrets["HERMES_AGENT_SECRET"])
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
             self.assertEqual(set(agent_secrets), {"HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
@@ -1360,7 +1364,7 @@ class HermesModuleStateTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
             write_envfile(
-                Path("agent_1.env"),
+                Path("agents") / "1" / "agent.env",
                 {
                     "AGENT_ID": "1",
                     "AGENT_NAME": "Seed Agent",
@@ -1398,9 +1402,9 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertIn("--entrypoint", command)
             self.assertIn("/bin/sh", command)
             self.assertIn("--env-file", command)
-            self.assertIn(str((Path(temp_dir) / "agent_1.env").resolve()), command)
-            self.assertNotIn(str((Path(temp_dir) / "agent_1_secrets.env").resolve()), command)
-            self.assertIn("hermes-agent-1-home:/opt/data:z", command)
+            self.assertIn(str((Path(temp_dir) / "agents" / "1" / "agent.env").resolve()), command)
+            self.assertNotIn(str((Path(temp_dir) / "secrets" / "1.env").resolve()), command)
+            self.assertIn("hermes-agents-home:/opt/agents:z", command)
             self.assertIn(f"{(ROOT / 'imageroot' / 'templates').resolve()}:/templates:ro,z", command)
             self.assertEqual(command[-2], "-c")
             self.assertEqual(command[-1], seed_action["SEED_SCRIPT"])
@@ -1415,10 +1419,10 @@ class HermesModuleStateTest(unittest.TestCase):
 
         seed_script = seed_action["SEED_SCRIPT"]
 
-        self.assertIn("ensure_safe_target /opt/data/SOUL.md", seed_script)
-        self.assertIn("if [ ! -e /opt/data/SOUL.md ]; then", seed_script)
-        self.assertIn("ensure_safe_target /opt/data/.env", seed_script)
-        self.assertIn("if [ ! -e /opt/data/.env ]; then", seed_script)
+        self.assertIn('ensure_safe_target "${HERMES_HOME}/SOUL.md"', seed_script)
+        self.assertIn('if [ ! -e "${HERMES_HOME}/SOUL.md" ]; then', seed_script)
+        self.assertIn('ensure_safe_target "${HERMES_HOME}/.env"', seed_script)
+        self.assertIn('if [ ! -e "${HERMES_HOME}/.env" ]; then', seed_script)
 
     def test_seed_agent_home_script_preserves_existing_files_on_rerun(self):
         with mock.patch("sys.stdin", io.StringIO("{}")):
@@ -1430,7 +1434,7 @@ class HermesModuleStateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "opt-data"
             data_dir.mkdir()
-            seed_script = seed_action["SEED_SCRIPT"].replace("/opt/data", str(data_dir)).replace(
+            seed_script = seed_action["SEED_SCRIPT"].replace(
                 "/templates",
                 str((ROOT / "imageroot" / "templates").resolve()),
             )
@@ -1482,7 +1486,8 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertEqual(command[command.index("--user") + 1], "root")
         self.assertIn("--entrypoint", command)
         self.assertEqual(command[command.index("--entrypoint") + 1], "/bin/sh")
-        self.assertIn("hermes-agent-2-home:/opt/data:z", command)
+        self.assertIn("hermes-agents-home:/opt/agents:z", command)
+        self.assertIn("AGENT_ID=2", command)
         self.assertIn("quay.io/example/hermes:test", command)
         ownership_script = command[-1]
         self.assertIn("id -u hermes", ownership_script)
@@ -1497,7 +1502,7 @@ class HermesModuleStateTest(unittest.TestCase):
                 Path("agents") / "1" / "metadata.json",
                 {"id": 1, "name": "One", "role": "developer", "status": "start"},
             )
-            write_envfile("agent_3.env", {"AGENT_ID": "3"})
+            self.state.ensure_private_directory(Path("agents") / "3")
 
             with mock.patch("subprocess.run", side_effect=lambda *args, **kwargs: types.SimpleNamespace(returncode=0)) as run_mock:
                 runpy.run_path(str(UPDATE_OWNERSHIP_SCRIPT_PATH), run_name="__main__")
@@ -1545,7 +1550,7 @@ class HermesModuleStateTest(unittest.TestCase):
                 Path("agents") / "1" / "metadata.json",
                 {"id": 1, "name": "One", "role": "developer", "status": "start"},
             )
-            write_envfile("agent_3.env", {"AGENT_ID": "3"})
+            self.state.ensure_private_directory(Path("agents") / "3")
 
             with mock.patch("subprocess.run", side_effect=run_side_effect) as run_mock:
                 runpy.run_path(str(UPDATE_RESTART_SCRIPT_PATH), run_name="__main__")
@@ -1847,7 +1852,7 @@ class HermesModuleStateTest(unittest.TestCase):
                 {"TIMEZONE": "UTC"},
             )
             write_envfile(
-                Path("agent_3_secrets.env"),
+                self.state.SECRETS_DIR / "3.env",
                 {
                     "HERMES_AGENT_SECRET": "preserved",
                     "SMTP_PASSWORD": "old-pass",
@@ -1863,7 +1868,7 @@ class HermesModuleStateTest(unittest.TestCase):
             ):
                 self.sync.sync_agent_runtime_files(agent_id=3)
 
-            agent_secrets = read_envfile(Path("agent_3_secrets.env"))
+            agent_secrets = read_envfile(self.state.SECRETS_DIR / "3.env")
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], "preserved")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
             self.assertEqual(set(agent_secrets), {"HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
@@ -1878,6 +1883,8 @@ class HermesModuleStateTest(unittest.TestCase):
         setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
         setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
         setattr(agent_stub, "bind_user_domains", mock.Mock(return_value=True))
+        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value=None))
+        setattr(agent_stub, "assert_exp", mock.Mock())
         setattr(agent_stub, "tasks", agent_tasks_stub)
         sys.modules["agent"] = agent_stub
         sys.modules["agent.tasks"] = agent_tasks_stub
@@ -1888,9 +1895,9 @@ class HermesModuleStateTest(unittest.TestCase):
                     Path("agents") / "2" / "metadata.json",
                     {"id": 2, "name": "Old Agent", "role": "default", "status": "stop"},
                 )
-                write_envfile(Path("agent_2.env"), {"AGENT_NAME": "Old Agent"})
+                write_envfile(Path("agents") / "2" / "agent.env", {"AGENT_NAME": "Old Agent"})
                 write_envfile(
-                    Path("agent_2_secrets.env"),
+                    self.state.SECRETS_DIR / "2.env",
                     {"HERMES_AGENT_SECRET": "old-secret"},
                 )
 
@@ -1923,7 +1930,7 @@ class HermesModuleStateTest(unittest.TestCase):
                         "TIMEZONE": "UTC",
                         "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
                     },
-                    clear=False,
+                    clear=True,
                 ), mock.patch("subprocess.run", side_effect=run_side_effect) as run_command:
                     run_action(CONFIGURE_MODULE_ACTION_DIR, request)
 
@@ -1938,8 +1945,7 @@ class HermesModuleStateTest(unittest.TestCase):
                     },
                 )
                 self.assertFalse((Path("agents") / "2").exists())
-                self.assertFalse(Path("agent_2.env").exists())
-                self.assertFalse(Path("agent_2_secrets.env").exists())
+                self.assertFalse((self.state.SECRETS_DIR / "2.env").exists())
                 agent_stub.set_env.assert_not_called()
                 agent_stub.bind_user_domains.assert_called_once_with([])
                 command_list = [call.args[0] for call in run_command.call_args_list]
@@ -1954,14 +1960,10 @@ class HermesModuleStateTest(unittest.TestCase):
                         ["podman", "rm", "--force", "hermes-socket-2"],
                     ],
                 )
-                self.assertEqual(
-                    command_list[6:9],
-                    [
-                        ["runagent", "remove-agent-state", "--agent-id", "2"],
-                        ["podman", "volume", "exists", "hermes-agent-2-home"],
-                        ["podman", "volume", "rm", "--force", "hermes-agent-2-home"],
-                    ],
-                )
+                self.assertEqual(command_list[6], ["runagent", "remove-agent-state", "--agent-id", "2"])
+                self.assertEqual(command_list[7], ["podman", "volume", "exists", "hermes-agents-home"])
+                self.assertEqual(command_list[8][:2], ["podman", "run"])
+                self.assertIn("hermes-agent-cleanup-2", command_list[8])
                 self.assertIn(["runagent", "discover-smarthost"], command_list)
                 self.assertIn(["runagent", "sync-agent-runtime"], command_list)
                 self.assertIn(["systemctl", "--user", "daemon-reload"], command_list)
@@ -1973,11 +1975,11 @@ class HermesModuleStateTest(unittest.TestCase):
                 self.assertIn(["systemctl", "--user", "start", "hermes@1.service"], command_list)
                 self.assertIn(["systemctl", "--user", "disable", "--now", "hermes-auth.service"], command_list)
                 self.assertIn(["podman", "rm", "--force", "hermes-auth"], command_list)
-                seed_commands = [command for command in command_list if command[:2] == ["podman", "run"]]
+                seed_commands = [command for command in command_list if command[:2] == ["podman", "run"] and "hermes-agent-seed-1" in command]
                 self.assertEqual(len(seed_commands), 1)
                 self.assertIn("hermes-agent-seed-1", seed_commands[0])
-                self.assertIn(str((Path(temp_dir) / "agent_1.env").resolve()), seed_commands[0])
-                self.assertNotIn(str((Path(temp_dir) / "agent_1_secrets.env").resolve()), seed_commands[0])
+                self.assertIn(str((Path(temp_dir) / "agents" / "1" / "agent.env").resolve()), seed_commands[0])
+                self.assertNotIn(str((Path(temp_dir) / "secrets" / "1.env").resolve()), seed_commands[0])
         finally:
             if original_agent is not None:
                 sys.modules["agent"] = original_agent
@@ -2140,7 +2142,7 @@ class HermesModuleStateTest(unittest.TestCase):
                         "TIMEZONE": "UTC",
                         "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
                     },
-                    clear=False,
+                    clear=True,
                 ), mock.patch(
                     "subprocess.run",
                     side_effect=lambda command, **kwargs: emulate_sync_agent_runtime(self.sync, command)
@@ -2185,9 +2187,9 @@ class HermesModuleStateTest(unittest.TestCase):
                     Path("agents") / "2" / "metadata.json",
                     {"id": 2, "name": "Old Agent", "role": "default", "status": "stop"},
                 )
-                write_envfile(Path("agent_2.env"), {"AGENT_NAME": "Old Agent"})
+                write_envfile(Path("agents") / "2" / "agent.env", {"AGENT_NAME": "Old Agent"})
                 write_envfile(
-                    Path("agent_2_secrets.env"),
+                    self.state.SECRETS_DIR / "2.env",
                     {"HERMES_AGENT_SECRET": "old-secret"},
                 )
 
@@ -2250,6 +2252,162 @@ class HermesModuleStateTest(unittest.TestCase):
             elif "agent.tasks" in sys.modules:
                 del sys.modules["agent.tasks"]
 
+    def test_restore_copyenv_restores_only_allowlisted_shared_environment(self):
+        original_agent = sys.modules.get("agent")
+        agent_stub = types.ModuleType("agent")
+        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
+        setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
+        sys.modules["agent"] = agent_stub
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch.dict(
+                os.environ,
+                {"TIMEZONE": "UTC"},
+                clear=True,
+            ), mock.patch(
+                "sys.stdin",
+                io.StringIO(
+                    json.dumps(
+                        {
+                            "environment": {
+                                "TIMEZONE": " Europe/Rome ",
+                                "BASE_VIRTUALHOST": " Agents.Example.ORG ",
+                                "USER_DOMAIN": " Example.Org ",
+                                "LETS_ENCRYPT": "TrUe",
+                                "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:restored",
+                            }
+                        }
+                    )
+                ),
+            ):
+                runpy.run_path(str(RESTORE_COPY_ENV_PATH), run_name="__main__")
+
+                self.assertEqual(read_envfile("environment"), {
+                    "TIMEZONE": "Europe/Rome",
+                    "BASE_VIRTUALHOST": "agents.example.org",
+                    "USER_DOMAIN": "example.org",
+                    "LETS_ENCRYPT": "true",
+                })
+                self.assertNotIn(
+                    mock.call("HERMES_AGENT_HERMES_IMAGE", "quay.io/example/hermes:restored"),
+                    agent_stub.set_env.call_args_list,
+                )
+        finally:
+            if original_agent is not None:
+                sys.modules["agent"] = original_agent
+            else:
+                del sys.modules["agent"]
+
+    def test_restore_copyenv_rejects_missing_environment(self):
+        original_agent = sys.modules.get("agent")
+        agent_stub = types.ModuleType("agent")
+        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
+        setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
+        sys.modules["agent"] = agent_stub
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch(
+                "sys.stdin", io.StringIO("{}")
+            ), self.assertRaisesRegex(ValueError, "restore environment"):
+                runpy.run_path(str(RESTORE_COPY_ENV_PATH), run_name="__main__")
+        finally:
+            if original_agent is not None:
+                sys.modules["agent"] = original_agent
+            else:
+                del sys.modules["agent"]
+
+    def test_restore_module_replays_configure_module_from_restored_state(self):
+        original_agent = sys.modules.get("agent")
+        original_agent_tasks = sys.modules.get("agent.tasks")
+        agent_tasks_stub = types.ModuleType("agent.tasks")
+        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
+
+        agent_stub = types.ModuleType("agent")
+        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
+        setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
+        setattr(agent_stub, "assert_exp", mock.Mock())
+        setattr(agent_stub, "tasks", agent_tasks_stub)
+        sys.modules["agent"] = agent_stub
+        sys.modules["agent.tasks"] = agent_tasks_stub
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch.dict(
+                os.environ,
+                {"AGENT_ID": "module/hermes-agent15", "TIMEZONE": "UTC"},
+                clear=False,
+            ):
+                self.state.write_jsonfile(
+                    Path("agents") / "1" / "metadata.json",
+                    {
+                        "id": 1,
+                        "name": "Restored Agent",
+                        "role": "developer",
+                        "status": "start",
+                        "allowed_user": "alice",
+                    },
+                )
+                request = json.dumps(
+                    {
+                        "environment": {
+                            "TIMEZONE": " Europe/Rome ",
+                            "BASE_VIRTUALHOST": " Agents.Example.ORG ",
+                            "USER_DOMAIN": " Example.Org ",
+                            "LETS_ENCRYPT": "true",
+                            "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:restored",
+                        }
+                    }
+                )
+
+                run_action(RESTORE_MODULE_ACTION_DIR, request)
+
+                self.assertEqual(read_envfile("environment"), {
+                    "TIMEZONE": "Europe/Rome",
+                    "BASE_VIRTUALHOST": "agents.example.org",
+                    "USER_DOMAIN": "example.org",
+                    "LETS_ENCRYPT": "true",
+                })
+                agent_tasks_stub.run.assert_called_once_with(
+                    agent_id="module/hermes-agent15",
+                    action="configure-module",
+                    data={
+                        "base_virtualhost": "agents.example.org",
+                        "user_domain": "example.org",
+                        "lets_encrypt": True,
+                        "agents": [
+                            {
+                                "id": 1,
+                                "name": "Restored Agent",
+                                "role": "developer",
+                                "status": "start",
+                                "allowed_user": "alice",
+                            }
+                        ],
+                    },
+                )
+                agent_stub.assert_exp.assert_called_once_with(True, "The configure-module subtask failed!")
+        finally:
+            if original_agent is not None:
+                sys.modules["agent"] = original_agent
+            else:
+                del sys.modules["agent"]
+
+            if original_agent_tasks is not None:
+                sys.modules["agent.tasks"] = original_agent_tasks
+            elif "agent.tasks" in sys.modules:
+                del sys.modules["agent.tasks"]
+
+    def test_state_include_contains_only_canonical_restore_inputs(self):
+        state_include = STATE_INCLUDE_PATH.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(
+            state_include,
+            [
+                "state/agents",
+                "state/secrets",
+                "volumes/hermes-agents-home",
+            ],
+        )
+
     def test_destroy_module_removes_routes_and_runtime_for_known_agent_state(self):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
@@ -2266,11 +2424,7 @@ class HermesModuleStateTest(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
                 write_envfile(
-                    Path("agent_4.env"),
-                    {"AGENT_NAME": "Route Agent"},
-                )
-                write_envfile(
-                    Path("agent_4_secrets.env"),
+                    self.state.SECRETS_DIR / "4.env",
                     {"HERMES_AGENT_SECRET": "persisted-secret"},
                 )
 
@@ -2279,7 +2433,7 @@ class HermesModuleStateTest(unittest.TestCase):
                         return emulate_remove_agent_state(command)
                     return types.SimpleNamespace(returncode=0)
 
-                with mock.patch.dict(os.environ, {"MODULE_ID": "hermes-agent1"}, clear=False), mock.patch(
+                with mock.patch.dict(os.environ, {"MODULE_ID": "hermes-agent1", "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"}, clear=False), mock.patch(
                     "subprocess.run",
                     side_effect=run_side_effect,
                 ) as run_command:
@@ -2320,12 +2474,11 @@ class HermesModuleStateTest(unittest.TestCase):
                         mock.call(["podman", "rm", "--force", "hermes-4"], check=False),
                         mock.call(["podman", "rm", "--force", "hermes-socket-4"], check=False),
                         mock.call(["runagent", "remove-agent-state", "--agent-id", "4"], check=True),
-                        mock.call(["podman", "volume", "exists", "hermes-agent-4-home"], check=False),
-                        mock.call(["podman", "volume", "rm", "--force", "hermes-agent-4-home"], check=True),
+                        mock.call(["podman", "volume", "exists", "hermes-agents-home"], check=False),
+                        mock.call(["podman", "run", "--rm", "--replace", "--name", "hermes-agent-cleanup-4", "--network=none", "--user", "root", "--entrypoint", "/bin/sh", "--volume", "hermes-agents-home:/opt/agents:z", "quay.io/example/hermes:test", "-c", "rm -rf /opt/agents/4"], check=True),
                     ],
                 )
-                self.assertFalse(Path("agent_4.env").exists())
-                self.assertFalse(Path("agent_4_secrets.env").exists())
+                self.assertFalse((self.state.SECRETS_DIR / "4.env").exists())
         finally:
             if original_agent is not None:
                 sys.modules["agent"] = original_agent
@@ -2356,7 +2509,6 @@ class HermesModuleStateTest(unittest.TestCase):
                     Path("agents") / "1" / "metadata.json",
                     {"id": 1, "name": "One Agent", "role": "default", "status": "start"},
                 )
-                write_envfile(Path("agent_2.env"), {"AGENT_NAME": "Two Agent"})
 
                 with mock.patch.dict(
                     os.environ,
@@ -2473,16 +2625,15 @@ class HermesModuleStateTest(unittest.TestCase):
                     "allowed_user": "",
                 },
             )
-            write_envfile(Path("agent_2.env"), {"AGENT_NAME": "Two Agent"})
-            write_envfile(Path("agent_3_secrets.env"), {"HERMES_AGENT_SECRET": "secret"})
+            self.state.ensure_private_directory(Path("agents") / "2")
+            write_envfile(self.state.SECRETS_DIR / "3.env", {"HERMES_AGENT_SECRET": "secret"})
 
             self.assertEqual(self.state.list_known_agent_ids(), [1, 2, 3])
 
     def test_list_known_agent_ids_ignores_out_of_range_entries(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
             self.state.ensure_private_directory(Path("agents") / "31")
-            write_envfile(Path("agent_32.env"), {"AGENT_NAME": "Ignored Agent"})
-            write_envfile(Path("agent_0_secrets.env"), {"HERMES_AGENT_SECRET": "ignored"})
+            write_envfile(self.state.SECRETS_DIR / "0.env", {"HERMES_AGENT_SECRET": "ignored"})
 
             self.assertEqual(self.state.list_known_agent_ids(), [])
 
@@ -2504,14 +2655,14 @@ class HermesModuleStateTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
                 self.state.ensure_private_directory(Path("agents") / "4")
                 self.state.ensure_private_directory(self.state.AGENT_DASHBOARD_SOCKETS_DIR)
-                write_envfile(Path("agent_4.env"), {"AGENT_NAME": "Four Agent"})
-                write_envfile(Path("agent_4_secrets.env"), {"HERMES_AGENT_SECRET": "secret"})
+                write_envfile(Path("agents") / "4" / "agent.env", {"AGENT_NAME": "Four Agent"})
+                write_envfile(self.state.SECRETS_DIR / "4.env", {"HERMES_AGENT_SECRET": "secret"})
                 (self.state.AGENT_DASHBOARD_SOCKETS_DIR / "agent-4.sock").write_text("socket", encoding="utf-8")
 
                 def run_side_effect(command, check=False, **kwargs):
-                    if command == ["podman", "volume", "exists", "hermes-agent-4-home"]:
+                    if command == ["podman", "volume", "exists", "hermes-agents-home"]:
                         return types.SimpleNamespace(returncode=0)
-                    if command == ["podman", "volume", "rm", "--force", "hermes-agent-4-home"]:
+                    if "hermes-agent-cleanup-4" in command:
                         raise subprocess.CalledProcessError(returncode=125, cmd=command)
                     return types.SimpleNamespace(returncode=0)
 
@@ -2519,11 +2670,11 @@ class HermesModuleStateTest(unittest.TestCase):
                 with self.assertRaises(subprocess.CalledProcessError), mock.patch(
                     "subprocess.run",
                     side_effect=run_side_effect,
-                ):
+                ), mock.patch.dict(os.environ, {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"}, clear=False):
                     runpy.run_path(str(REMOVE_AGENT_STATE_PATH), run_name="__main__")
 
-                self.assertTrue(Path("agent_4.env").exists())
-                self.assertTrue(Path("agent_4_secrets.env").exists())
+                self.assertTrue((Path("agents") / "4" / "agent.env").exists())
+                self.assertTrue((self.state.SECRETS_DIR / "4.env").exists())
                 self.assertTrue((Path("agents") / "4").exists())
                 self.assertTrue((self.state.AGENT_DASHBOARD_SOCKETS_DIR / "agent-4.sock").exists())
         finally:
@@ -2535,25 +2686,24 @@ class HermesModuleStateTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
                 self.state.ensure_private_directory(Path("agents") / "4")
                 self.state.ensure_private_directory(self.state.AGENT_DASHBOARD_SOCKETS_DIR)
-                write_envfile(Path("agent_4.env"), {"AGENT_NAME": "Four Agent"})
-                write_envfile(Path("agent_4_secrets.env"), {"HERMES_AGENT_SECRET": "secret"})
+                write_envfile(Path("agents") / "4" / "agent.env", {"AGENT_NAME": "Four Agent"})
+                write_envfile(self.state.SECRETS_DIR / "4.env", {"HERMES_AGENT_SECRET": "secret"})
                 (self.state.AGENT_DASHBOARD_SOCKETS_DIR / "agent-4.sock").write_text("socket", encoding="utf-8")
 
                 def run_side_effect(command, check=False, **kwargs):
-                    if command == ["podman", "volume", "exists", "hermes-agent-4-home"]:
+                    if command == ["podman", "volume", "exists", "hermes-agents-home"]:
                         return types.SimpleNamespace(returncode=1)
                     return types.SimpleNamespace(returncode=0)
 
                 sys.argv[:] = [str(REMOVE_AGENT_STATE_PATH), "--agent-id", "4"]
-                with mock.patch("subprocess.run", side_effect=run_side_effect):
+                with mock.patch("subprocess.run", side_effect=run_side_effect), mock.patch.dict(os.environ, {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"}, clear=False):
                     with self.assertRaises(SystemExit) as exit_error:
                         runpy.run_path(str(REMOVE_AGENT_STATE_PATH), run_name="__main__")
 
                 self.assertEqual(exit_error.exception.code, 0)
 
-                self.assertFalse(Path("agent_4.env").exists())
-                self.assertFalse(Path("agent_4_secrets.env").exists())
                 self.assertFalse((Path("agents") / "4").exists())
+                self.assertFalse((self.state.SECRETS_DIR / "4.env").exists())
                 self.assertFalse((self.state.AGENT_DASHBOARD_SOCKETS_DIR / "agent-4.sock").exists())
         finally:
             sys.argv[:] = original_argv

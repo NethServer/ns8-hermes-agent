@@ -10,17 +10,20 @@ OWNERSHIP_SCRIPT = r'''
 uid="$(id -u hermes)"
 gid="$(id -g hermes)"
 desired_owner="${uid}:${gid}"
-marker="/opt/data/.ns8-hermes-agent-owner"
+agent_dir="/opt/agents/${AGENT_ID}"
+marker="${agent_dir}/.ns8-hermes-agent-owner"
 current_owner=""
+
+mkdir -p "$agent_dir"
 
 if [ -f "$marker" ]; then
   current_owner="$(cat "$marker" || true)"
 fi
 
-top_owner="$(stat -c '%u:%g' /opt/data)"
+top_owner="$(stat -c '%u:%g' "$agent_dir")"
 
 if [ "$current_owner" != "$desired_owner" ] || [ "$top_owner" != "$desired_owner" ]; then
-  chown -R "$uid:$gid" /opt/data
+  chown -R "$uid:$gid" "$agent_dir"
   printf '%s\n' "$desired_owner" > "$marker"
   chown "$uid:$gid" "$marker"
 fi
@@ -43,8 +46,9 @@ def ensure_agent_home_ownership(agent_id):
         "root",
         "--entrypoint",
         "/bin/sh",
+        "--env", f"AGENT_ID={agent_id}",
         "--volume",
-        f"hermes-agent-{agent_id}-home:/opt/data:z",
+        f"hermes-agents-home:/opt/agents:z",
         image,
         "-eu",
         "-c",

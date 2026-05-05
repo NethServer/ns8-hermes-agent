@@ -115,8 +115,8 @@ Module-wide state:
 Per-agent state files:
 
 - `agents/<id>/metadata.json`
-- `agent_<id>.env`
-- `agent_<id>_secrets.env`
+- `agents/<id>/agent.env`
+- `secrets/<id>.env`
 
 Per-agent Podman volume:
 
@@ -126,7 +126,7 @@ Per-agent Podman volume:
 
 The active managed Traefik route instance is `<module_id>-hermes-auth`. Hermes home volume names are `hermes-agent-<id>-home`.
 
-Shared auth state files:
+Shared auth state files (generated, not backed up):
 
 - `authproxy.env`
 - `authproxy_secrets.env`
@@ -138,7 +138,7 @@ Shared SMTP values come from `discover-smarthost`:
 - `SMTP_PASSWORD` is written into `secrets.env`
 
 `sync-agent-runtime` copies the relevant shared SMTP values into each generated Hermes env file and per-agent secrets file, generates the shared auth runtime files, and ensures `HERMES_AUTH_SESSION_SECRET` exists in `secrets.env`.
-When `USER_DOMAIN` is configured, `sync-agent-runtime` also writes these public env keys into each generated `agent_<id>.env` file:
+When `USER_DOMAIN` is configured, `sync-agent-runtime` also writes these public env keys into each generated `agents/<id>/agent.env` file:
 
 - `AGENT_ALLOWED_USER`
 - `USER_DOMAIN`
@@ -147,7 +147,7 @@ When `USER_DOMAIN` is configured, `sync-agent-runtime` also writes these public 
 - `LDAP_BASE_DN`
 - `LDAP_SCHEMA`
 
-and these LDAP bind values into each generated `agent_<id>_secrets.env` file:
+and these LDAP bind values into each generated `secrets/<id>.env` file:
 
 - `LDAP_BIND_DN`
 - `LDAP_BIND_PASSWORD`
@@ -189,7 +189,7 @@ The runtime manages two files inside each agent volume:
 - `.env`, from `imageroot/templates/home.env.in`
 
 Placeholder replacement is performed inside the one-shot `configure-module/75seed-agent-home` container by mounting the checked-in templates at `/templates` and the per-agent volume at `/opt/data`.
-The seed step consumes only the generated public `agent_<id>.env` file plus `AGENT_ID`, `AGENT_NAME`, and `AGENT_ROLE` substitutions.
+The seed step consumes only the generated public `agents/<id>/agent.env` file plus `AGENT_ID`, `AGENT_NAME`, and `AGENT_ROLE` substitutions.
 Seeding is strict first-write only: later agent edits preserve existing `SOUL.md` and `.env` content in the volume.
 
 ## Action flow
@@ -239,6 +239,11 @@ Seeding is strict first-write only: later agent edits preserve existing `SOUL.md
 - `20stop-services`: disables and stops every known `hermes@<id>.service`, stops each per-agent pod, removes the Hermes and auth proxy containers if present
 - `30remove-agent-state`: delegates generated-state cleanup for each known agent to `remove-agent-state`
 - `40remove-agents-root`: removes the top-level `agents/` directory
+
+### `restore-module`
+
+- `06copyenv`: restores only Hermes-managed shared keys from `request['environment']` (`TIMEZONE`, `BASE_VIRTUALHOST`, `USER_DOMAIN`, `LETS_ENCRYPT`) and intentionally ignores core-managed values.
+- `20configure`: reads the restored `agents/` tree and reruns `configure-module` so NS8 restore replays user-domain binding, runtime-file generation, route reconciliation, and service reconciliation after the `hermes-agents-home` volume and canonical state are restored from restic.
 
 ## Testing contract
 

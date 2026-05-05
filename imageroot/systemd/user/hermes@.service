@@ -6,7 +6,7 @@ After=hermes-pod@%i.service
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
 EnvironmentFile=-%S/state/environment
-EnvironmentFile=-%S/state/agent_%i.env
+EnvironmentFile=-%S/state/agents/%i/agent.env
 WorkingDirectory=%S/state
 Restart=always
 KillMode=none
@@ -22,11 +22,11 @@ ExecStart=runagent /usr/bin/podman run \
 		--sdnotify=conmon \
 		--cgroups=no-conmon \
 		--pod hermes-pod-%i \
-		--env-file %S/state/agent_%i.env \
-		--env-file %S/state/agent_%i_secrets.env \
+		--env-file %S/state/agents/%i/agent.env \
+		--env-file %S/state/secrets/%i.env \
 		--env API_SERVER_ENABLED=true \
 		--env API_SERVER_HOST=127.0.0.1 \
-		--volume hermes-agent-%i-home:/opt/data:z \
+		--volume hermes-agents-home:/opt/agents:z \
 		--tz=${TIMEZONE} \
 		${HERMES_AGENT_HERMES_IMAGE} \
 		hermes gateway run

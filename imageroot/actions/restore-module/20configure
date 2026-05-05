@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import sys
+from pathlib import Path
+
+import agent
+import agent.tasks
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
+
+from hermes_agent_state import BASE_VIRTUALHOST_ENV, LETS_ENCRYPT_ENV, USER_DOMAIN_ENV, env_to_bool, read_agents_from_state
+
+
+json.load(sys.stdin)
+
+configure_request = {
+    "base_virtualhost": (os.getenv(BASE_VIRTUALHOST_ENV) or "").strip().lower(),
+    "user_domain": (os.getenv(USER_DOMAIN_ENV) or "").strip().lower(),
+    "lets_encrypt": env_to_bool(os.getenv(LETS_ENCRYPT_ENV)),
+    "agents": read_agents_from_state(),
+}
+
+configure_retval = agent.tasks.run(
+    agent_id=os.environ["AGENT_ID"],
+    action="configure-module",
+    data=configure_request,
+)
+agent.assert_exp(configure_retval["exit_code"] == 0, "The configure-module subtask failed!")

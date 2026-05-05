@@ -9,7 +9,7 @@ import agent
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
-from hermes_agent_state import AGENTS_DIR, SHARED_SECRETS_ENVFILE, ensure_private_directory
+from hermes_agent_state import AGENTS_DIR, SECRETS_DIR, SHARED_SECRETS_ENVFILE, ensure_private_directory
 
 
 def ensure_private_file(path):
@@ -33,4 +33,5 @@ timezone = (os.getenv("TIMEZONE") or "UTC").strip() or "UTC"
 agent.set_env("TIMEZONE", timezone)
 
 ensure_private_directory(AGENTS_DIR)
+ensure_private_directory(SECRETS_DIR)
 ensure_private_file(SHARED_SECRETS_ENVFILE)

@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+# Move per-agent public env files from the state root into the agents/<id>/
+# subdirectory so they are captured by the backup (state/agents is in
+# state-include.conf).  Idempotent: skips agents where the source no longer
+# exists or the destination is already in place.
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
+
+from hermes_agent_state import AGENT_PUBLIC_ENVFILE, AGENTS_DIR, MAX_AGENTS
+
+
+def migrate_agent_env_files():
+    for agent_id in range(1, MAX_AGENTS + 1):
+        old_path = Path(f"agent_{agent_id}.env")
+        if not old_path.exists():
+            continue
+
+        new_path = AGENTS_DIR / str(agent_id) / AGENT_PUBLIC_ENVFILE
+        if new_path.exists():
+            old_path.unlink()
+            continue
+
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.rename(new_path)
+
+
+migrate_agent_env_files()

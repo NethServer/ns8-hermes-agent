@@ -20,6 +20,10 @@ This document maps the current layout.
 
 - `AGENTS.md`: local runtime instructions.
 
+### `imageroot/etc/`
+
+- `state-include.conf`: declares the backup scope consumed by NS8 core: `state/agents`, `state/secrets`, and `volumes/hermes-agents-home`. Derived auth proxy files are regenerated after restore and are intentionally excluded.
+
 ### `imageroot/actions/`
 
 - `create-module/10initialize-state`: initializes `TIMEZONE` and creates the base state directory and shared secrets file.
@@ -31,8 +35,8 @@ This document maps the current layout.
 - `configure-module/40remove-deleted-agents`: stops removed services, removes removed pods and containers including `hermes-socket-<id>`, and delegates generated-state cleanup.
 - `configure-module/50write-agent-metadata`: stores one metadata file per desired agent, including persisted `allowed_user`.
 - `configure-module/60refresh-shared-settings`: refreshes shared SMTP settings via `discover-smarthost`.
-- `configure-module/70sync-agent-runtime`: regenerates `agent_<id>.env` and `agent_<id>_secrets.env`, including the live auth proxy LDAP runtime env, bind secrets, and per-agent `AGENT_ALLOWED_USER` when a shared `user_domain` is configured, and writes `authproxy_agents.json` `upstream_socket` entries.
-- `configure-module/75seed-agent-home`: runs a one-shot Hermes container to seed strict first-write-only `/opt/data/SOUL.md` and `/opt/data/.env` content from checked-in templates.
+- `configure-module/70sync-agent-runtime`: regenerates `agents/<id>/agent.env` and `secrets/<id>.env`, including the live auth proxy LDAP runtime env, bind secrets, and per-agent `AGENT_ALLOWED_USER` when a shared `user_domain` is configured, and writes `authproxy_agents.json` `upstream_socket` entries.
+- `configure-module/75seed-agent-home`: runs a one-shot Hermes container to seed strict first-write-only `SOUL.md` and `.env` content into the agent's subdir inside the shared `hermes-agents-home` volume from checked-in templates.
 - `configure-module/80reload-systemd`: reloads the user systemd manager.
 - `configure-module/90reconcile-desired-routes`: creates, updates, or deletes the shared Traefik auth route for the desired configuration.
 - `configure-module/95reconcile-agent-services`: enables, starts, stops, or disables `hermes@<id>.service` and `hermes-socket@<id>.service` to match desired state.
@@ -50,17 +54,22 @@ This document maps the current layout.
 - `destroy-module/20stop-services`: stops known services and removes known pods and containers, including `hermes-socket-<id>`.
 - `destroy-module/30remove-agent-state`: delegates generated file, directory, and volume cleanup for each known agent.
 - `destroy-module/40remove-agents-root`: removes the top-level `agents/` directory.
+- `restore-module/06copyenv`: restores only Hermes-managed shared keys from `request['environment']` (`TIMEZONE`, `BASE_VIRTUALHOST`, `USER_DOMAIN`, `LETS_ENCRYPT`) and leaves core-managed values alone.
+- `restore-module/20configure`: reads the restored `agents/` tree and reruns `configure-module` so restore replays user-domain binding, derived runtime generation, route reconciliation, and service reconciliation from canonical restored state.
 
 ### `imageroot/bin/`
 
-- `discover-smarthost`: reads cluster smarthost settings and writes public values into `environment` and `SMTP_PASSWORD` into `secrets.env`.
-- `ensure-agent-home-ownership`: runs a one-shot root helper container from the configured Hermes image and recursively assigns an agent home volume to that image's dynamic `hermes` UID/GID when needed.
-- `remove-agent-state`: removes generated per-agent env files, dashboard socket files, agent state directories, and the per-agent Hermes home volume.
-- `sync-agent-runtime`: writes `agent_<id>.env` and `agent_<id>_secrets.env` for each configured agent, including the live auth proxy LDAP env and bind secrets when `USER_DOMAIN` is set, and generates `authproxy_agents.json` `upstream_socket` records.
+- `discover-smarthost`: reads cluster smarthost settings and writes public values into `environment` and `SMTP_PASSWORD` into `secrets/shared.env`.
+- `ensure-agent-home-ownership`: runs a one-shot root helper container from the configured Hermes image and recursively assigns the per-agent subdir inside `hermes-agents-home` to that image's dynamic `hermes` UID/GID when needed.
+- `remove-agent-state`: removes generated per-agent secrets files (`secrets/<id>.env`), dashboard socket files, agent state directories (which include `agents/<id>/agent.env`), and the per-agent subdir inside the shared `hermes-agents-home` volume.
+- `sync-agent-runtime`: writes `agents/<id>/agent.env` and `secrets/<id>.env` for each configured agent, including the live auth proxy LDAP env and bind secrets when `USER_DOMAIN` is set, and generates `authproxy_agents.json` `upstream_socket` records.
 
 ### `imageroot/update-module.d/`
 
-- `30ensure-agent-home-ownership`: NS8 update hook that repairs every known agent home volume and clears failed state on any active agent service pair before the later restart step.
+- `15migrate-agents-volume`: NS8 update hook that copies each per-agent `hermes-agent-{id}-home` Podman volume into the shared `hermes-agents-home` volume under `/opt/agents/{id}/`, then removes the old per-agent volume. Idempotent; skips agents whose old volume no longer exists.
+- `20migrate-secrets-dir`: NS8 update hook that moves the flat `secrets.env` file to `secrets/shared.env` and each `agent_{N}_secrets.env` file to `secrets/{N}.env`. Idempotent.
+- `25migrate-agent-env`: NS8 update hook that moves each root-level `agent_<id>.env` file to `agents/<id>/agent.env`. Idempotent; skips agents whose old file no longer exists.
+- `30ensure-agent-home-ownership`: NS8 update hook that repairs every known agent home subdir inside `hermes-agents-home` and clears failed state on any active agent service pair before the later restart step.
 - `80restart`: NS8 update hook that restarts enabled `hermes@<id>.service`, `hermes-socket@<id>.service`, and `hermes-auth.service` units so running containers pick up refreshed images.
 
 ### `imageroot/events/`
@@ -69,7 +78,7 @@ This document maps the current layout.
 
 ### `imageroot/pypkg/`
 
-- `hermes_agent_state.py`: small shared helper for metadata validation, env/json file handling, dashboard socket naming, and named-volume naming.
+- `hermes_agent_state.py`: small shared helper for metadata validation, env/json file handling, dashboard socket naming, named-volume and secrets-directory layout (`SECRETS_DIR`, `AGENTS_HOME_VOLUME`, `SHARED_SECRETS_ENVFILE`), and the `list_known_agent_ids()` scanner.
 - `hermes_user_domain.py`: shared helper for user-domain normalization, `Ldapproxy` lookup, LDAP user listing, and generation of per-agent LDAP runtime env and bind secrets.
 
 ### `imageroot/systemd/user/`

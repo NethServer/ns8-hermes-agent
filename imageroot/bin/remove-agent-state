@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -8,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
 
-from hermes_agent_state import AGENT_DASHBOARD_SOCKETS_DIR, MAX_AGENTS, agent_dashboard_socket_name
+from hermes_agent_state import AGENT_DASHBOARD_SOCKETS_DIR, AGENTS_HOME_VOLUME, MAX_AGENTS, SECRETS_DIR, agent_dashboard_socket_name
 
 
 def parse_agent_id(value):
@@ -18,27 +19,43 @@ def parse_agent_id(value):
     raise argparse.ArgumentTypeError(f"agent id must be between 1 and {MAX_AGENTS}")
 
 
-def ensure_volume_removed(agent_id):
+def remove_agent_home_subdir(agent_id):
+    image = os.environ.get("HERMES_AGENT_HERMES_IMAGE")
+    if not image:
+        raise ValueError("HERMES_AGENT_HERMES_IMAGE is not set")
+
     exists_result = subprocess.run(
-        ["podman", "volume", "exists", f"hermes-agent-{agent_id}-home"],
+        ["podman", "volume", "exists", AGENTS_HOME_VOLUME],
         check=False,
     )
-    if exists_result.returncode == 0:
-        subprocess.run(["podman", "volume", "rm", "--force", f"hermes-agent-{agent_id}-home"], check=True)
+    if exists_result.returncode != 0:
         return
-    if exists_result.returncode == 1:
-        return
-    raise RuntimeError(f"failed to inspect volume hermes-agent-{agent_id}-home")
+
+    subprocess.run(
+        [
+            "podman", "run",
+            "--rm",
+            "--replace",
+            "--name", f"hermes-agent-cleanup-{agent_id}",
+            "--network=none",
+            "--user", "root",
+            "--entrypoint", "/bin/sh",
+            "--volume", f"{AGENTS_HOME_VOLUME}:/opt/agents:z",
+            image,
+            "-c", f"rm -rf /opt/agents/{agent_id}",
+        ],
+        check=True,
+    )
 
 
 def remove_agent_state(agent_id):
     # Remove all generated runtime artifacts for an agent ID so future
     # reconfiguration starts from clean metadata, env files, and home volume.
-    ensure_volume_removed(agent_id)
+    remove_agent_home_subdir(agent_id)
 
-    for path in (Path(f"agent_{agent_id}.env"), Path(f"agent_{agent_id}_secrets.env")):
-        if path.exists():
-            path.unlink()
+    agent_secrets_path = SECRETS_DIR / f"{agent_id}.env"
+    if agent_secrets_path.exists():
+        agent_secrets_path.unlink()
 
     dashboard_socket_path = AGENT_DASHBOARD_SOCKETS_DIR / agent_dashboard_socket_name(agent_id)
     if dashboard_socket_path.exists() or dashboard_socket_path.is_symlink():

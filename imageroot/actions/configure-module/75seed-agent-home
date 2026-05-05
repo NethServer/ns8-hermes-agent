@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 # later runs must preserve any SOUL.md or .env changes already made in volume.
 SEED_SCRIPT = r'''
 umask 077
-mkdir -p /opt/data
+mkdir -p "$HERMES_HOME"
 
 ensure_safe_target() {
   target="$1"
@@ -58,14 +58,14 @@ PY
 
 # Seed files only when absent so operator edits inside the named volume survive
 # reconfiguration and service restarts.
-ensure_safe_target /opt/data/SOUL.md
-if [ ! -e /opt/data/SOUL.md ]; then
-  render_template "/templates/SOUL/${AGENT_ROLE}.md.in" /opt/data/SOUL.md title
+ensure_safe_target "${HERMES_HOME}/SOUL.md"
+if [ ! -e "${HERMES_HOME}/SOUL.md" ]; then
+  render_template "/templates/SOUL/${AGENT_ROLE}.md.in" "${HERMES_HOME}/SOUL.md" title
 fi
 
-ensure_safe_target /opt/data/.env
-if [ ! -e /opt/data/.env ]; then
-  render_template /templates/home.env.in /opt/data/.env raw
+ensure_safe_target "${HERMES_HOME}/.env"
+if [ ! -e "${HERMES_HOME}/.env" ]; then
+  render_template /templates/home.env.in "${HERMES_HOME}/.env" raw
 fi
 '''
 
@@ -78,7 +78,7 @@ def templates_dir():
 
 
 def public_env_file(agent_id):
-    path = (Path.cwd() / f"agent_{agent_id}.env").resolve()
+    path = (Path.cwd() / "agents" / str(agent_id) / "agent.env").resolve()
     if not path.is_file():
         raise ValueError(f"agent env file not found: {path}")
     return path
@@ -104,7 +104,7 @@ def seed_agent_home(agent_id, templates_path):
         "--env-file",
         str(public_env_file(agent_id)),
         "--volume",
-        f"hermes-agent-{agent_id}-home:/opt/data:z",
+        f"hermes-agents-home:/opt/agents:z",
         "--volume",
         f"{templates_path}:/templates:ro,z",
         image,

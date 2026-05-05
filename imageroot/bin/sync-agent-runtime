@@ -13,15 +13,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
 from hermes_agent_state import (
     AGENT_SECRET_KEY,
     AGENT_ALLOWED_USER_ENV,
+    AGENTS_DIR,
+    AGENTS_HOME_VOLUME,
+    AGENT_PUBLIC_ENVFILE,
     AUTH_SESSION_SECRET_KEY,
     AUTHPROXY_AGENTS_FILE,
     AUTHPROXY_ENVFILE,
     AUTHPROXY_SECRETS_ENVFILE,
     BASE_VIRTUALHOST_ENV,
+    SECRETS_DIR,
+    SHARED_SECRETS_ENVFILE,
     SMTP_PUBLIC_KEYS,
     SMTP_SECRET_KEY,
     USER_DOMAIN_ENV,
     agent_dashboard_socket_path,
+    ensure_private_directory,
     read_agents_from_state,
     write_jsonfile,
 )
@@ -62,6 +68,7 @@ def build_agent_public_env(agent_data, shared_environment):
         "AGENT_ID": str(agent_data["id"]),
         "AGENT_NAME": agent_data["name"],
         "AGENT_ROLE": agent_data["role"],
+        "HERMES_HOME": f"/opt/agents/{agent_data['id']}",
         "TIMEZONE": timezone_value(shared_environment),
         "TZ": timezone_value(shared_environment),
     }
@@ -111,7 +118,8 @@ def ensure_shared_session_secret(shared_secrets):
 
     updated_shared_secrets = dict(shared_secrets)
     updated_shared_secrets[AUTH_SESSION_SECRET_KEY] = generate_secret()
-    agent.write_envfile("secrets.env", updated_shared_secrets)
+    ensure_private_directory(SECRETS_DIR)
+    agent.write_envfile(SHARED_SECRETS_ENVFILE, updated_shared_secrets)
     return updated_shared_secrets
 
 
@@ -163,24 +171,28 @@ def build_authproxy_agents(shared_environment):
 
 def sync_agent_runtime_files(agent_id=None):
     shared_environment = agent.read_envfile("environment")
-    shared_secrets = ensure_shared_session_secret(agent.read_envfile("secrets.env"))
+    shared_secrets = ensure_shared_session_secret(agent.read_envfile(SHARED_SECRETS_ENVFILE))
     agent_data_list = [agent_by_id(agent_id)] if agent_id is not None else read_agents_from_state()
 
     agent.write_envfile(AUTHPROXY_ENVFILE, build_authproxy_env(shared_environment))
     agent.write_envfile(AUTHPROXY_SECRETS_ENVFILE, build_authproxy_secrets(shared_secrets, shared_environment))
     write_jsonfile(AUTHPROXY_AGENTS_FILE, build_authproxy_agents(shared_environment))
 
+    ensure_private_directory(SECRETS_DIR)
     for agent_data in agent_data_list:
+        agent_dir = AGENTS_DIR / str(agent_data["id"])
+        ensure_private_directory(agent_dir)
         # Regenerate both files from the canonical shared state so systemd unit
         # restarts always see a complete, current runtime snapshot.
         agent.write_envfile(
-            Path(f"agent_{agent_data['id']}.env"),
+            agent_dir / AGENT_PUBLIC_ENVFILE,
             build_agent_public_env(agent_data, shared_environment),
         )
-        existing_agent_secrets = read_optional_envfile(Path(f"agent_{agent_data['id']}_secrets.env"))
+        agent_secrets_path = SECRETS_DIR / Path(f"{agent_data['id']}.env")
+        existing_agent_secrets = read_optional_envfile(agent_secrets_path)
         agent_secrets = build_agent_secrets(existing_agent_secrets, shared_secrets, shared_environment)
         agent.write_envfile(
-            Path(f"agent_{agent_data['id']}_secrets.env"),
+            agent_secrets_path,
             agent_secrets,
         )
 

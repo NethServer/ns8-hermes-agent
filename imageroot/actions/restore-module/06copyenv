@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+
+import json
+import sys
+from pathlib import Path
+
+import agent
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
+
+from hermes_agent_state import (
+    BASE_VIRTUALHOST_ENV,
+    LETS_ENCRYPT_ENV,
+    TIMEZONE_DEFAULT,
+    TIMEZONE_ENV,
+    USER_DOMAIN_ENV,
+    bool_to_env,
+    env_to_bool,
+)
+from hermes_user_domain import normalize_user_domain
+
+
+def normalize_base_virtualhost(value):
+    return (value or "").strip().lower()
+
+
+request = json.load(sys.stdin)
+original_environment = request.get("environment")
+if not isinstance(original_environment, dict):
+    raise ValueError("restore environment is required")
+
+timezone = (original_environment.get(TIMEZONE_ENV) or TIMEZONE_DEFAULT).strip() or TIMEZONE_DEFAULT
+agent.set_env(TIMEZONE_ENV, timezone)
+
+base_virtualhost = normalize_base_virtualhost(original_environment.get(BASE_VIRTUALHOST_ENV))
+if base_virtualhost:
+    agent.set_env(BASE_VIRTUALHOST_ENV, base_virtualhost)
+else:
+    agent.unset_env(BASE_VIRTUALHOST_ENV)
+
+user_domain = normalize_user_domain(original_environment.get(USER_DOMAIN_ENV))
+if user_domain:
+    agent.set_env(USER_DOMAIN_ENV, user_domain)
+else:
+    agent.unset_env(USER_DOMAIN_ENV)
+
+agent.set_env(LETS_ENCRYPT_ENV, bool_to_env(env_to_bool(original_environment.get(LETS_ENCRYPT_ENV))))
