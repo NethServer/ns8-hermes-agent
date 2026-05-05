@@ -66,19 +66,6 @@
                   <p class="section-description">
                     {{ $t("settings.base_virtualhost_description") }}
                   </p>
-                  <NsTextInput
-                    v-model.trim="workspaceVirtualhost"
-                    :label="$t('settings.workspace_virtualhost')"
-                    :placeholder="$t('settings.workspace_virtualhost_placeholder')"
-                    :invalid-message="error.workspaceVirtualhost"
-                    :disabled="
-                      loading.getConfiguration || loading.configureModule
-                    "
-                    ref="workspaceVirtualhost"
-                  />
-                  <p class="section-description">
-                    {{ $t("settings.workspace_virtualhost_description") }}
-                  </p>
                   <cv-select
                     v-model="userDomain"
                     :label="$t('settings.user_domain')"
@@ -184,9 +171,6 @@
                         {{ $t("settings.dashboard") }}
                       </cv-structured-list-heading>
                       <cv-structured-list-heading>
-                        {{ $t("settings.workspace") }}
-                      </cv-structured-list-heading>
-                      <cv-structured-list-heading>
                         {{ $t("settings.actions") }}
                       </cv-structured-list-heading>
                     </template>
@@ -222,18 +206,6 @@
                           </cv-link>
                           <span v-else>{{
                             $t("settings.dashboard_not_configured")
-                          }}</span>
-                        </cv-structured-list-data>
-                        <cv-structured-list-data class="break-word">
-                          <cv-link
-                            v-if="agentWorkspaceUrl(agentData)"
-                            :href="agentWorkspaceUrl(agentData)"
-                            target="_blank"
-                          >
-                            {{ agentWorkspaceUrl(agentData) }}
-                          </cv-link>
-                          <span v-else>{{
-                            $t("settings.workspace_not_configured")
                           }}</span>
                         </cv-structured-list-data>
                         <cv-structured-list-data
@@ -362,7 +334,7 @@
               loading.configureModule ||
               loading.listDomainUsers ||
               !normalizeUserDomain() ||
-              !publishingEnabled
+              !normalizedBaseVirtualhost
             "
             ref="createAgentAllowedUser"
             class="mg-bottom-lg"
@@ -449,7 +421,7 @@
               loading.configureModule ||
               loading.listDomainUsers ||
               !normalizeUserDomain() ||
-              !publishingEnabled
+              !normalizedBaseVirtualhost
             "
             ref="editAgentAllowedUser"
             class="mg-bottom-lg"
@@ -562,7 +534,6 @@ export default {
       },
       urlCheckInterval: null,
       baseVirtualhost: "",
-      workspaceVirtualhost: "",
       userDomain: "",
       letsEncrypt: false,
       isLetsEncryptCurrentlyEnabled: false,
@@ -606,7 +577,6 @@ export default {
         getConfiguration: "",
         configureModule: "",
         baseVirtualhost: "",
-        workspaceVirtualhost: "",
         userDomain: "",
         listUserDomains: "",
         listDomainUsers: "",
@@ -624,16 +594,8 @@ export default {
     normalizedBaseVirtualhost() {
       return this.normalizeBaseVirtualhost();
     },
-    normalizedWorkspaceVirtualhost() {
-      return this.normalizeWorkspaceVirtualhost();
-    },
-    publishingEnabled() {
-      return !!(
-        this.normalizedBaseVirtualhost || this.normalizedWorkspaceVirtualhost
-      );
-    },
     allowedUserPlaceholder() {
-      if (!this.publishingEnabled) {
+      if (!this.normalizedBaseVirtualhost) {
         return this.$t("settings.allowed_user_not_required");
       }
 
@@ -724,9 +686,6 @@ export default {
       this.baseVirtualhost = this.normalizeBaseVirtualhost(
         config.base_virtualhost || ""
       );
-      this.workspaceVirtualhost = this.normalizeWorkspaceVirtualhost(
-        config.workspace_virtualhost || ""
-      );
       this.userDomain = this.normalizeUserDomain(config.user_domain || "");
       this.letsEncrypt = !!config.lets_encrypt;
       this.isLetsEncryptCurrentlyEnabled = !!config.lets_encrypt;
@@ -739,7 +698,6 @@ export default {
       let focusAlreadySet = false;
 
       this.error.baseVirtualhost = "";
-        this.error.workspaceVirtualhost = "";
       this.error.userDomain = "";
 
       if (this.configureMode === "create") {
@@ -813,19 +771,6 @@ export default {
           }
         }
 
-        if (field.endsWith("workspace_virtualhost")) {
-          this.error.workspaceVirtualhost = this.$t(
-            validationError.error === "workspace_virtualhost_duplicated"
-              ? "settings.workspace_virtualhost_duplicated"
-              : "settings.workspace_virtualhost_invalid"
-          );
-
-          if (!focusAlreadySet) {
-            this.focusElement("workspaceVirtualhost");
-            focusAlreadySet = true;
-          }
-        }
-
         if (field === "user_domain") {
           this.error.userDomain = this.$t(
             validationError.error === "user_domain_required"
@@ -844,9 +789,8 @@ export default {
     },
     async saveAgents(nextAgents, mode) {
       this.error.baseVirtualhost = "";
-      this.error.workspaceVirtualhost = "";
       this.error.userDomain = "";
-      if (!this.validateVirtualhosts()) {
+      if (!this.validateBaseVirtualhost()) {
         this.error.configureModule = this.$t("error.validation_error");
         return;
       }
@@ -882,7 +826,6 @@ export default {
           action: taskAction,
           data: {
             base_virtualhost: this.normalizeBaseVirtualhost(),
-            workspace_virtualhost: this.normalizeWorkspaceVirtualhost(),
             user_domain: this.normalizeUserDomain(),
             lets_encrypt: this.letsEncrypt,
             agents: this.buildAgentPayload(this.submittedAgents),
@@ -947,9 +890,6 @@ export default {
       return null;
     },
     normalizeBaseVirtualhost(value = this.baseVirtualhost) {
-      return (value || "").trim().toLowerCase();
-    },
-    normalizeWorkspaceVirtualhost(value = this.workspaceVirtualhost) {
       return (value || "").trim().toLowerCase();
     },
     normalizeUserDomain(value = this.userDomain) {
@@ -1019,61 +959,24 @@ export default {
 
       return `${label} ${this.$t("settings.allowed_user_locked_suffix")}`;
     },
-    isValidVirtualhost(value) {
-      return /^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+(?!-)[A-Za-z0-9-]{1,63}(?<!-)$/.test(
-        value
-      );
-    },
-    validateVirtualhosts() {
+    validateBaseVirtualhost() {
       const normalizedBaseVirtualhost = this.normalizeBaseVirtualhost();
-      const normalizedWorkspaceVirtualhost =
-        this.normalizeWorkspaceVirtualhost();
-      let isValid = true;
-
       if (
         normalizedBaseVirtualhost &&
-        !this.isValidVirtualhost(normalizedBaseVirtualhost)
+        !/^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+(?!-)[A-Za-z0-9-]{1,63}(?<!-)$/.test(
+          normalizedBaseVirtualhost
+        )
       ) {
         this.error.baseVirtualhost = this.$t(
           "settings.base_virtualhost_invalid"
         );
-        this.focusElement("baseVirtualhost");
-        isValid = false;
+        return false;
       }
 
-      if (
-        normalizedWorkspaceVirtualhost &&
-        !this.isValidVirtualhost(normalizedWorkspaceVirtualhost)
-      ) {
-        this.error.workspaceVirtualhost = this.$t(
-          "settings.workspace_virtualhost_invalid"
-        );
-
-        if (isValid) {
-          this.focusElement("workspaceVirtualhost");
-        }
-        isValid = false;
-      }
-
-      if (
-        normalizedBaseVirtualhost &&
-        normalizedWorkspaceVirtualhost &&
-        normalizedBaseVirtualhost === normalizedWorkspaceVirtualhost
-      ) {
-        this.error.workspaceVirtualhost = this.$t(
-          "settings.workspace_virtualhost_duplicated"
-        );
-
-        if (isValid) {
-          this.focusElement("workspaceVirtualhost");
-        }
-        isValid = false;
-      }
-
-      return isValid;
+      return true;
     },
     validateUserDomain(nextAgents) {
-      if (!this.publishingEnabled || !nextAgents.length) {
+      if (!this.normalizeBaseVirtualhost() || !nextAgents.length) {
         return true;
       }
 
@@ -1091,16 +994,7 @@ export default {
         return "";
       }
 
-      return `https://${normalizedBaseVirtualhost}/hermes-${agentData.id}/dashboard`;
-    },
-    agentWorkspaceUrl(agentData) {
-      const normalizedWorkspaceVirtualhost =
-        this.normalizeWorkspaceVirtualhost();
-      if (!normalizedWorkspaceVirtualhost) {
-        return "";
-      }
-
-      return `https://${normalizedWorkspaceVirtualhost}/hermes-${agentData.id}/workspace`;
+      return `https://${normalizedBaseVirtualhost}/hermes-${agentData.id}/`;
     },
     roleLabel(role) {
       return this.$t(`settings.role_${role}`);
@@ -1216,7 +1110,7 @@ export default {
         }
       }
 
-      if (this.publishingEnabled) {
+      if (this.normalizeBaseVirtualhost()) {
         if (!this.normalizeUserDomain()) {
           this.error.userDomain = this.$t("settings.user_domain_required");
 
@@ -1273,7 +1167,7 @@ export default {
         }
       }
 
-      if (this.publishingEnabled) {
+      if (this.normalizeBaseVirtualhost()) {
         if (!this.normalizeUserDomain()) {
           this.error.userDomain = this.$t("settings.user_domain_required");
 

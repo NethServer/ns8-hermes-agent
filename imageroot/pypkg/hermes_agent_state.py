@@ -13,9 +13,7 @@ AUTHPROXY_SECRETS_ENVFILE = Path("authproxy_secrets.env")
 AUTHPROXY_AGENTS_FILE = Path("authproxy_agents.json")
 AGENTS_DIR = Path("agents")
 AGENT_DASHBOARD_SOCKETS_DIR = Path("dashboard-sockets")
-AGENT_WORKSPACE_SOCKETS_DIR = Path("workspace-sockets")
-AUTHPROXY_DASHBOARD_SOCKET_MOUNT_DIR = "/dashboard-sockets"
-AUTHPROXY_WORKSPACE_SOCKET_MOUNT_DIR = "/workspace-sockets"
+AUTHPROXY_SOCKET_MOUNT_DIR = "/sockets"
 SOUL_TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates" / "SOUL"
 MAX_AGENTS = 30
 
@@ -36,7 +34,6 @@ AGENT_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)\.env$")
 AGENT_SECRETS_ENVFILE_PATTERN = re.compile(r"^agent_(\d+)_secrets\.env$")
 AGENT_SECRET_KEY = "HERMES_AGENT_SECRET"
 AUTH_SESSION_SECRET_KEY = "HERMES_AUTH_SESSION_SECRET"
-API_SERVER_KEY = "API_SERVER_KEY"
 SMTP_PUBLIC_KEYS = (
     "SMTP_ENABLED",
     "SMTP_HOST",
@@ -51,36 +48,14 @@ TIMEZONE_DEFAULT = "UTC"
 TCP_PORT_ENV = "TCP_PORT"
 BASE_VIRTUALHOST_ENV = "BASE_VIRTUALHOST"
 BASE_VIRTUALHOST_PREVIOUS_ENV = "_HERMES_BASE_VIRTUALHOST_PREVIOUS"
-WORKSPACE_VIRTUALHOST_ENV = "WORKSPACE_VIRTUALHOST"
-WORKSPACE_VIRTUALHOST_PREVIOUS_ENV = "_HERMES_WORKSPACE_VIRTUALHOST_PREVIOUS"
 LETS_ENCRYPT_ENV = "LETS_ENCRYPT"
 LETS_ENCRYPT_PREVIOUS_ENV = "_HERMES_LETS_ENCRYPT_PREVIOUS"
 USER_DOMAIN_ENV = "USER_DOMAIN"
 AGENT_ALLOWED_USER_ENV = "AGENT_ALLOWED_USER"
-HERMES_DASHBOARD_VIRTUALHOST_ENV = "HERMES_DASHBOARD_VIRTUALHOST"
-HERMES_WORKSPACE_VIRTUALHOST_ENV = "HERMES_WORKSPACE_VIRTUALHOST"
 DASHBOARD_PORT = 9119
 BASE_VIRTUALHOST_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+(?!-)[A-Za-z0-9-]{1,63}(?<!-)$"
 )
-
-
-def normalize_virtualhost(value):
-    return (value or "").strip().lower()
-
-
-def published_virtualhosts(base_virtualhost="", workspace_virtualhost=""):
-    published_hosts = {}
-
-    normalized_base_virtualhost = normalize_virtualhost(base_virtualhost)
-    if normalized_base_virtualhost:
-        published_hosts["dashboard"] = normalized_base_virtualhost
-
-    normalized_workspace_virtualhost = normalize_virtualhost(workspace_virtualhost)
-    if normalized_workspace_virtualhost:
-        published_hosts["workspace"] = normalized_workspace_virtualhost
-
-    return published_hosts
 
 
 def env_to_bool(value):
@@ -167,7 +142,7 @@ def write_jsonfile(path, data):
     write_private_textfile(file_path, f"{json.dumps(data, indent=2)}\n")
 
 
-def _module_value(module_id=None, shared_environment=None):
+def shared_route_instance_name(module_id=None, shared_environment=None):
     if shared_environment is None:
         shared_environment = os.environ
 
@@ -175,42 +150,18 @@ def _module_value(module_id=None, shared_environment=None):
     if not module_value:
         raise ValueError("MODULE_ID is required to derive route instance names")
 
-    return module_value
-
-
-def shared_route_instance_name(module_id=None, app_name="dashboard", shared_environment=None):
-    module_value = _module_value(module_id=module_id, shared_environment=shared_environment)
-
-    return f"{module_value}-hermes-auth-{app_name}"
-
-
-def legacy_shared_route_instance_name(module_id=None, shared_environment=None):
-    module_value = _module_value(module_id=module_id, shared_environment=shared_environment)
-
     return f"{module_value}-hermes-auth"
 
 
-def validate_agent_id(agent_id):
+def agent_dashboard_socket_name(agent_id):
     if not isinstance(agent_id, int) or agent_id < 1 or agent_id > MAX_AGENTS:
         raise ValueError(f"agent id must be between 1 and {MAX_AGENTS}")
 
-
-def agent_dashboard_socket_name(agent_id):
-    validate_agent_id(agent_id)
-    return f"agent-{agent_id}-dashboard.sock"
-
-
-def agent_workspace_socket_name(agent_id):
-    validate_agent_id(agent_id)
     return f"agent-{agent_id}.sock"
 
 
-def agent_dashboard_socket_path(agent_id, socket_dir=AUTHPROXY_DASHBOARD_SOCKET_MOUNT_DIR):
+def agent_dashboard_socket_path(agent_id, socket_dir=AUTHPROXY_SOCKET_MOUNT_DIR):
     return str(Path(socket_dir) / agent_dashboard_socket_name(agent_id))
-
-
-def agent_workspace_socket_path(agent_id, socket_dir=AUTHPROXY_WORKSPACE_SOCKET_MOUNT_DIR):
-    return str(Path(socket_dir) / agent_workspace_socket_name(agent_id))
 
 
 def read_agents_from_state():

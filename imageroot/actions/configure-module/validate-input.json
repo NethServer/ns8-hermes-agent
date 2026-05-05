@@ -11,24 +11,7 @@
     ],
     "properties": {
         "base_virtualhost": {
-            "description": "Dashboard virtualhost for Hermes dashboard publishing. When set, authenticated requests to https://<host>/ route through the shared auth proxy to the assigned dashboard, and explicit /hermes-N/dashboard paths remain supported.",
-            "anyOf": [
-                {
-                    "type": "string",
-                    "maxLength": 0
-                },
-                {
-                    "type": "string",
-                    "format": "hostname",
-                    "pattern": "\\.",
-                    "not": {
-                        "format": "ipv4"
-                    }
-                }
-            ]
-        },
-        "workspace_virtualhost": {
-            "description": "Workspace virtualhost for Hermes Workspace publishing. When set, authenticated requests to https://<host>/ route through the shared auth proxy to the assigned workspace, and explicit /hermes-N/workspace paths remain supported.",
+            "description": "Base virtualhost for agent dashboards. When set, every agent gets a Traefik route at https://<host>/hermes-N/ that forwards to its dedicated Hermes web dashboard. Must be a valid fully qualified domain name or left empty to disable shared dashboard hosting.",
             "anyOf": [
                 {
                     "type": "string",
@@ -46,11 +29,11 @@
         },
         "user_domain": {
             "type": "string",
-            "description": "Selected NS8 user domain used to authenticate dashboard and workspace logins when either shared virtualhost is enabled. Leave empty only when no shared auth route is published."
+            "description": "Selected NS8 user domain used to authenticate dashboard logins when shared dashboard publishing is enabled. Leave empty to disable domain-backed dashboard authentication setup."
         },
         "lets_encrypt": {
             "type": "boolean",
-            "description": "Request a Let's Encrypt certificate for each published Hermes dashboard or workspace virtualhost when routes are managed through Traefik."
+            "description": "Request a Let's Encrypt certificate for the shared dashboard virtualhost when routes are published through Traefik."
         },
         "agents": {
             "type": "array",
@@ -96,7 +79,7 @@
                     },
                     "allowed_user": {
                         "type": "string",
-                        "description": "Bare username from the selected NS8 user domain that is allowed to access this agent through the shared dashboard and workspace virtualhosts when publishing is enabled."
+                        "description": "Bare username from the selected NS8 user domain that is allowed to access this agent dashboard when shared dashboard publishing is enabled."
                     }
                 }
             }

@@ -13,8 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 from hermes_agent_state import (
     BASE_VIRTUALHOST_PREVIOUS_ENV,
     LETS_ENCRYPT_PREVIOUS_ENV,
-    WORKSPACE_VIRTUALHOST_ENV,
-    WORKSPACE_VIRTUALHOST_PREVIOUS_ENV,
     read_agents_from_state,
 )
 from hermes_user_domain import auth_required
@@ -27,14 +25,10 @@ def run(command, check=True):
 def stop_disable_agent(agent_id):
     # Reset the whole runtime footprint for stopped agents so systemd can
     # recreate the declared one-agent/one-pod layout on the next start.
-    run(["systemctl", "--user", "disable", "--now", f"workspace-socket@{agent_id}.service"], check=False)
-    run(["systemctl", "--user", "disable", "--now", f"workspace@{agent_id}.service"], check=False)
     run(["systemctl", "--user", "disable", "--now", f"hermes-socket@{agent_id}.service"], check=False)
     run(["systemctl", "--user", "disable", "--now", f"hermes@{agent_id}.service"], check=False)
     run(["systemctl", "--user", "stop", f"hermes-pod@{agent_id}.service"], check=False)
     run(["podman", "pod", "rm", "--force", f"hermes-pod-{agent_id}"], check=False)
-    run(["podman", "rm", "--force", f"workspace-{agent_id}"], check=False)
-    run(["podman", "rm", "--force", f"workspace-socket-{agent_id}"], check=False)
     run(["podman", "rm", "--force", f"hermes-{agent_id}"], check=False)
     run(["podman", "rm", "--force", f"hermes-socket-{agent_id}"], check=False)
 
@@ -47,27 +41,17 @@ for agent_data in desired_agents:
         # Stop first so the unit rebuilds the pod and containers from the fresh
         # generated env files instead of reusing stale runtime state.
         run(["systemctl", "--user", "enable", f"hermes@{agent_id}.service"])
-        run(["systemctl", "--user", "enable", f"workspace@{agent_id}.service"])
         run(["systemctl", "--user", "enable", f"hermes-socket@{agent_id}.service"])
-        run(["systemctl", "--user", "enable", f"workspace-socket@{agent_id}.service"])
-        run(["systemctl", "--user", "stop", f"workspace-socket@{agent_id}.service"], check=False)
         run(["systemctl", "--user", "stop", f"hermes-socket@{agent_id}.service"], check=False)
-        run(["systemctl", "--user", "stop", f"workspace@{agent_id}.service"], check=False)
         run(["systemctl", "--user", "stop", f"hermes@{agent_id}.service"], check=False)
         run(["systemctl", "--user", "stop", f"hermes-pod@{agent_id}.service"], check=False)
         run(["systemctl", "--user", "start", f"hermes@{agent_id}.service"])
-        run(["systemctl", "--user", "start", f"workspace@{agent_id}.service"])
         run(["systemctl", "--user", "start", f"hermes-socket@{agent_id}.service"])
-        run(["systemctl", "--user", "start", f"workspace-socket@{agent_id}.service"])
         continue
 
     stop_disable_agent(agent_id)
 
-if auth_required(
-    (os.getenv("BASE_VIRTUALHOST") or "").strip().lower(),
-    desired_agents,
-    (os.getenv(WORKSPACE_VIRTUALHOST_ENV) or "").strip().lower(),
-):
+if auth_required((os.getenv("BASE_VIRTUALHOST") or "").strip().lower(), desired_agents):
     run(["systemctl", "--user", "enable", "hermes-auth.service"])
     run(["systemctl", "--user", "stop", "hermes-auth.service"], check=False)
     run(["systemctl", "--user", "start", "hermes-auth.service"])
@@ -76,5 +60,4 @@ else:
     run(["podman", "rm", "--force", "hermes-auth"], check=False)
 
 agent.unset_env(BASE_VIRTUALHOST_PREVIOUS_ENV)
-agent.unset_env(WORKSPACE_VIRTUALHOST_PREVIOUS_ENV)
 agent.unset_env(LETS_ENCRYPT_PREVIOUS_ENV)
