@@ -55,14 +55,7 @@
     "actions": "Actions",
     "no_agents": "No agents configured",
     "start_agent": "Start",
-    "stop_agent": "Stop",
-    "workspace_virtualhost": "Workspace virtualhost",
-    "workspace_virtualhost_placeholder": "Example: workspace.example.org",
-    "workspace_virtualhost_description": "When set, authenticated requests to https://<host>/ route to the assigned Hermes Workspace, and explicit /hermes-N/workspace paths stay available.",
-    "workspace_virtualhost_invalid": "Enter a valid fully qualified domain name or leave the field empty",
-    "workspace_virtualhost_duplicated": "Workspace virtualhost must be different from the dashboard virtualhost",
-    "workspace": "Workspace",
-    "workspace_not_configured": "Configure a workspace virtualhost to publish this workspace"
+    "stop_agent": "Stop"
   },
   "common": {
     "required": "Required",

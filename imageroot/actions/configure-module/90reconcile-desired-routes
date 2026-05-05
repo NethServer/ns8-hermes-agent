@@ -16,11 +16,7 @@ from hermes_agent_state import (
     LETS_ENCRYPT_ENV,
     LETS_ENCRYPT_PREVIOUS_ENV,
     TCP_PORT_ENV,
-    WORKSPACE_VIRTUALHOST_ENV,
-    WORKSPACE_VIRTUALHOST_PREVIOUS_ENV,
     env_to_bool,
-    legacy_shared_route_instance_name,
-    normalize_virtualhost,
     read_agents_from_state,
     shared_route_instance_name,
 )
@@ -39,12 +35,11 @@ def delete_route(instance_name, traefik_agent_id, lets_encrypt_cleanup=False):
     )
     agent.assert_exp(response["exit_code"] == 0)
 
-
-def upsert_shared_route(app_name, virtualhost, lets_encrypt, traefik_agent_id, lets_encrypt_cleanup=False):
+def upsert_shared_route(base_virtualhost, lets_encrypt, traefik_agent_id, lets_encrypt_cleanup=False):
     route_request = {
-        "instance": shared_route_instance_name(module_id=os.environ["MODULE_ID"], app_name=app_name),
+        "instance": shared_route_instance_name(module_id=os.environ["MODULE_ID"]),
         "url": f"http://127.0.0.1:{os.environ[TCP_PORT_ENV]}",
-        "host": virtualhost,
+        "host": base_virtualhost,
         "http2https": True,
         "lets_encrypt": lets_encrypt,
     }
@@ -58,105 +53,55 @@ def upsert_shared_route(app_name, virtualhost, lets_encrypt, traefik_agent_id, l
     agent.assert_exp(response["exit_code"] == 0)
 
 
-def reconcile_shared_route(
-    app_name,
-    current_virtualhost,
-    previous_virtualhost,
-    lets_encrypt,
-    previous_lets_encrypt,
-    route_active,
-    traefik_agent_id,
-):
-    instance_name = shared_route_instance_name(module_id=os.environ["MODULE_ID"], app_name=app_name)
-    host_changed = bool(previous_virtualhost) and previous_virtualhost != current_virtualhost
-    cleanup_previous_host = host_changed and previous_lets_encrypt
-    cleanup_disable_lets_encrypt = (
-        bool(current_virtualhost)
-        and route_active
-        and not host_changed
-        and previous_lets_encrypt
-        and not lets_encrypt
-    )
-
-    if host_changed:
-        delete_route(
-            instance_name,
-            traefik_agent_id,
-            lets_encrypt_cleanup=cleanup_previous_host,
-        )
-
-    if not current_virtualhost:
-        return
-
-    if route_active:
-        upsert_shared_route(
-            app_name,
-            current_virtualhost,
-            lets_encrypt,
-            traefik_agent_id,
-            lets_encrypt_cleanup=cleanup_disable_lets_encrypt,
-        )
-        return
-
-    delete_route(instance_name, traefik_agent_id)
-
-
 request = json.load(sys.stdin)
 
-dashboard_virtualhost = normalize_virtualhost(os.getenv(BASE_VIRTUALHOST_ENV))
-workspace_virtualhost = normalize_virtualhost(os.getenv(WORKSPACE_VIRTUALHOST_ENV))
-previous_dashboard_virtualhost = normalize_virtualhost(os.getenv(BASE_VIRTUALHOST_PREVIOUS_ENV))
-previous_workspace_virtualhost = normalize_virtualhost(os.getenv(WORKSPACE_VIRTUALHOST_PREVIOUS_ENV))
+base_virtualhost = (os.getenv(BASE_VIRTUALHOST_ENV) or "").strip().lower()
+previous_base_virtualhost = (os.getenv(BASE_VIRTUALHOST_PREVIOUS_ENV) or "").strip().lower()
+requested_base_virtualhost = ((request.get("base_virtualhost") or "").strip().lower() if "base_virtualhost" in request else None)
 lets_encrypt = env_to_bool(os.getenv(LETS_ENCRYPT_ENV))
 previous_lets_encrypt = env_to_bool(os.getenv(LETS_ENCRYPT_PREVIOUS_ENV))
 desired_agents = read_agents_from_state()
 
-if not any(
-    [
-        dashboard_virtualhost,
-        workspace_virtualhost,
-        previous_dashboard_virtualhost,
-        previous_workspace_virtualhost,
-    ]
-):
+if not base_virtualhost and requested_base_virtualhost is None and not previous_base_virtualhost:
     sys.exit(0)
 
 traefik_agent_id = agent.resolve_agent_id("traefik@node")
 if traefik_agent_id is None:
-    if not any(
-        [
-            dashboard_virtualhost,
-            workspace_virtualhost,
-            previous_dashboard_virtualhost,
-            previous_workspace_virtualhost,
-        ]
-    ):
+    if not base_virtualhost and not previous_base_virtualhost:
         sys.exit(0)
     raise ValueError("traefik@node route agent not found")
 
-route_active = bool(desired_agents)
+# Only one request should ask Traefik to clean up certificate state; the other
+# route operations in the same batch only add, update, or delete path entries.
+host_changed = bool(previous_base_virtualhost) and previous_base_virtualhost != base_virtualhost
+cleanup_previous_host = host_changed and previous_lets_encrypt
+cleanup_disable_lets_encrypt = bool(base_virtualhost) and not host_changed and previous_lets_encrypt and not lets_encrypt
+cleanup_delete_all_routes = not base_virtualhost and (lets_encrypt or previous_lets_encrypt)
 
-reconcile_shared_route(
-    "dashboard",
-    dashboard_virtualhost,
-    previous_dashboard_virtualhost,
-    lets_encrypt,
-    previous_lets_encrypt,
-    route_active,
-    traefik_agent_id,
-)
-reconcile_shared_route(
-    "workspace",
-    workspace_virtualhost,
-    previous_workspace_virtualhost,
-    lets_encrypt,
-    previous_lets_encrypt,
-    route_active,
-    traefik_agent_id,
-)
-
-if dashboard_virtualhost or previous_dashboard_virtualhost:
+if cleanup_previous_host:
     delete_route(
-        legacy_shared_route_instance_name(module_id=os.environ["MODULE_ID"]),
+        shared_route_instance_name(module_id=os.environ["MODULE_ID"]),
         traefik_agent_id,
+        lets_encrypt_cleanup=True,
+    )
+
+if base_virtualhost:
+    if desired_agents:
+        upsert_shared_route(
+            base_virtualhost,
+            lets_encrypt,
+            traefik_agent_id,
+            lets_encrypt_cleanup=cleanup_disable_lets_encrypt,
+        )
+    else:
+        delete_route(
+            shared_route_instance_name(module_id=os.environ["MODULE_ID"]),
+            traefik_agent_id,
+            lets_encrypt_cleanup=cleanup_delete_all_routes,
+        )
+else:
+    delete_route(
+        shared_route_instance_name(module_id=os.environ["MODULE_ID"]),
+        traefik_agent_id,
+        lets_encrypt_cleanup=cleanup_delete_all_routes,
     )

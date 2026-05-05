@@ -1,8 +1,6 @@
 import importlib
 import sys
 
-from hermes_agent_state import published_virtualhosts
-
 
 USER_DOMAIN_ENV = "USER_DOMAIN"
 LDAP_HOST_ENV = "LDAP_HOST"
@@ -22,8 +20,8 @@ def normalize_allowed_user(value):
     return (value or "").strip()
 
 
-def auth_required(base_virtualhost, agents, workspace_virtualhost=""):
-    return bool(published_virtualhosts(base_virtualhost, workspace_virtualhost)) and bool(agents)
+def auth_required(base_virtualhost, agents):
+    return bool((base_virtualhost or "").strip()) and bool(agents)
 
 
 def _ldapproxy_client():
