@@ -26,7 +26,6 @@ ExecStart=runagent /usr/bin/podman run \
 		--env-file %S/state/secrets/%i.env \
 		--env API_SERVER_ENABLED=true \
 		--env API_SERVER_HOST=127.0.0.1 \
-		--volume hermes-agents-home:/opt/agents:z \
 		--mount type=volume,src=hermes-agents-home,dst=/opt/data,subpath=%i \
 		--tz=${TIMEZONE} \
 		${HERMES_AGENT_HERMES_IMAGE} \

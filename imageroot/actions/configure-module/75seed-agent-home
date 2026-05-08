@@ -8,6 +8,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
+from hermes_agent_state import AGENTS_HOME_MOUNT_DIR, AGENTS_HOME_VOLUME, HERMES_RUNTIME_HOME
+
+
+PREPARE_HOME_SCRIPT = f'''
+mkdir -p "{AGENTS_HOME_MOUNT_DIR}/${{AGENT_ID}}"
+'''
+
 
 # This one-shot container seeds only files that should exist on first boot;
 # later runs must preserve any SOUL.md or .env changes already made in volume.
@@ -89,6 +96,29 @@ def seed_agent_home(agent_id, templates_path):
     if not image:
         raise ValueError("HERMES_AGENT_HERMES_IMAGE is not set")
 
+  prepare_command = [
+    "podman",
+    "run",
+    "--rm",
+    "--replace",
+    "--name",
+    f"hermes-agent-home-prepare-{agent_id}",
+    "--network=none",
+    "--user",
+    "hermes",
+    "--entrypoint",
+    "/bin/sh",
+    "--env",
+    f"AGENT_ID={agent_id}",
+    "--volume",
+    f"{AGENTS_HOME_VOLUME}:{AGENTS_HOME_MOUNT_DIR}:z",
+    image,
+    "-eu",
+    "-c",
+    PREPARE_HOME_SCRIPT,
+  ]
+  subprocess.run(prepare_command, check=True)
+
     command = [
         "podman",
         "run",
@@ -103,8 +133,10 @@ def seed_agent_home(agent_id, templates_path):
         "/bin/sh",
         "--env-file",
         str(public_env_file(agent_id)),
-        "--volume",
-        f"hermes-agents-home:/opt/agents:z",
+        "--env",
+        f"HERMES_HOME={HERMES_RUNTIME_HOME}",
+        "--mount",
+        f"type=volume,src={AGENTS_HOME_VOLUME},dst={HERMES_RUNTIME_HOME},subpath={agent_id}",
         "--volume",
         f"{templates_path}:/templates:ro,z",
         image,
