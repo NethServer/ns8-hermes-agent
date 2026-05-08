@@ -14,7 +14,6 @@ from hermes_agent_state import (
     AGENT_SECRET_KEY,
     AGENT_ALLOWED_USER_ENV,
     AGENTS_DIR,
-    AGENTS_HOME_VOLUME,
     AGENT_PUBLIC_ENVFILE,
     AUTH_SESSION_SECRET_KEY,
     AUTHPROXY_AGENTS_FILE,
@@ -68,7 +67,6 @@ def build_agent_public_env(agent_data, shared_environment):
         "AGENT_ID": str(agent_data["id"]),
         "AGENT_NAME": agent_data["name"],
         "AGENT_ROLE": agent_data["role"],
-        "HERMES_HOME": f"/opt/agents/{agent_data['id']}",
         "TIMEZONE": timezone_value(shared_environment),
         "TZ": timezone_value(shared_environment),
     }

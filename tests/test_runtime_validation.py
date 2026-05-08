@@ -1013,6 +1013,7 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("--pod hermes-pod-%i", service_template)
         self.assertIn("--name hermes-%i", service_template)
         self.assertIn("--volume hermes-agents-home:/opt/agents:z", service_template)
+        self.assertIn("--mount type=volume,src=hermes-agents-home,dst=/opt/data,subpath=%i", service_template)
         self.assertNotIn("--volume %S/state/agents/%i/home:/opt/data:Z", service_template)
         self.assertIn("--env-file %S/state/agents/%i/agent.env", service_template)
         self.assertNotIn("ensure-agent-home-ownership --agent-id %i", service_template)
