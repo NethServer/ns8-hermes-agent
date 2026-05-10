@@ -96,28 +96,28 @@ def seed_agent_home(agent_id, templates_path):
     if not image:
         raise ValueError("HERMES_AGENT_HERMES_IMAGE is not set")
 
-  prepare_command = [
-    "podman",
-    "run",
-    "--rm",
-    "--replace",
-    "--name",
-    f"hermes-agent-home-prepare-{agent_id}",
-    "--network=none",
-    "--user",
-    "hermes",
-    "--entrypoint",
-    "/bin/sh",
-    "--env",
-    f"AGENT_ID={agent_id}",
-    "--volume",
-    f"{AGENTS_HOME_VOLUME}:{AGENTS_HOME_MOUNT_DIR}:z",
-    image,
-    "-eu",
-    "-c",
-    PREPARE_HOME_SCRIPT,
-  ]
-  subprocess.run(prepare_command, check=True)
+    prepare_command = [
+        "podman",
+        "run",
+        "--rm",
+        "--replace",
+        "--name",
+        f"hermes-agent-home-prepare-{agent_id}",
+        "--network=none",
+        "--user",
+        "hermes",
+        "--entrypoint",
+        "/bin/sh",
+        "--env",
+        f"AGENT_ID={agent_id}",
+        "--volume",
+        f"{AGENTS_HOME_VOLUME}:{AGENTS_HOME_MOUNT_DIR}:z",
+        image,
+        "-eu",
+        "-c",
+        PREPARE_HOME_SCRIPT,
+    ]
+    subprocess.run(prepare_command, check=True)
 
     command = [
         "podman",
