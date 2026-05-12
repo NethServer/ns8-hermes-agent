@@ -10,11 +10,7 @@
 
 ## Quickstart
 
-Install the module with
-
-```bash
-add-module ghcr.io/stell0/hermes-agent:0.2.1 1
-```
+Enable NethForge repository and install the module from Software Center 
 
 From the UI, configure:
 
