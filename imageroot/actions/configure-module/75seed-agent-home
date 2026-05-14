@@ -96,6 +96,8 @@ def seed_agent_home(agent_id, templates_path):
     if not image:
         raise ValueError("HERMES_AGENT_HERMES_IMAGE is not set")
 
+    agent_env_file = public_env_file(agent_id)
+
     prepare_command = [
         "podman",
         "run",
@@ -132,7 +134,7 @@ def seed_agent_home(agent_id, templates_path):
         "--entrypoint",
         "/bin/sh",
         "--env-file",
-        str(public_env_file(agent_id)),
+        str(agent_env_file),
         "--env",
         f"HERMES_HOME={HERMES_RUNTIME_HOME}",
         "--mount",

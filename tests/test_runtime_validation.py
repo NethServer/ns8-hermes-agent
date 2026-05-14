@@ -1012,7 +1012,6 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertNotIn("hermes-auth@%i.service", service_template)
         self.assertIn("--pod hermes-pod-%i", service_template)
         self.assertIn("--name hermes-%i", service_template)
-        self.assertIn("--volume hermes-agents-home:/opt/agents:z", service_template)
         self.assertIn("--mount type=volume,src=hermes-agents-home,dst=/opt/data,subpath=%i", service_template)
         self.assertNotIn("--volume %S/state/agents/%i/home:/opt/data:Z", service_template)
         self.assertIn("--env-file %S/state/agents/%i/agent.env", service_template)
@@ -1060,7 +1059,7 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.4.30", containerfile)
+        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.5.7", containerfile)
         self.assertNotIn("FROM docker.io/node:24.11.1-slim AS dashboard-builder", containerfile)
         self.assertNotIn("COPY patch_dashboard_source.py /opt/hermes/patch_dashboard_source.py", containerfile)
         self.assertNotIn("ns8-web-dist", containerfile)
@@ -1230,7 +1229,6 @@ class HermesModuleStateTest(unittest.TestCase):
                     "AGENT_NAME",
                     "AGENT_ROLE",
                     "BASE_VIRTUALHOST",
-                    "HERMES_HOME",
                     "LDAP_BASE_DN",
                     "LDAP_HOST",
                     "LDAP_PORT",
@@ -1393,7 +1391,24 @@ class HermesModuleStateTest(unittest.TestCase):
             ), mock.patch("sys.stdin", io.StringIO(request)), mock.patch("subprocess.run") as run_command:
                 runpy.run_path(str(SEED_AGENT_HOME_ACTION_PATH), run_name="__main__")
 
-            command = run_command.call_args.args[0]
+            self.assertEqual(run_command.call_count, 2)
+
+            prepare_command = run_command.call_args_list[0].args[0]
+            self.assertEqual(prepare_command[:2], ["podman", "run"])
+            self.assertIn("--name", prepare_command)
+            self.assertIn("hermes-agent-home-prepare-1", prepare_command)
+            self.assertIn("--network=none", prepare_command)
+            self.assertIn("--user", prepare_command)
+            self.assertEqual(prepare_command[prepare_command.index("--user") + 1], "hermes")
+            self.assertIn("--entrypoint", prepare_command)
+            self.assertIn("/bin/sh", prepare_command)
+            self.assertIn("--env", prepare_command)
+            self.assertIn("AGENT_ID=1", prepare_command)
+            self.assertIn("hermes-agents-home:/opt/agents:z", prepare_command)
+            self.assertEqual(prepare_command[-2], "-c")
+            self.assertEqual(prepare_command[-1], seed_action["PREPARE_HOME_SCRIPT"])
+
+            command = run_command.call_args_list[1].args[0]
             self.assertEqual(command[:2], ["podman", "run"])
             self.assertIn("--name", command)
             self.assertIn("hermes-agent-seed-1", command)
@@ -1405,11 +1420,13 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertIn("--env-file", command)
             self.assertIn(str((Path(temp_dir) / "agents" / "1" / "agent.env").resolve()), command)
             self.assertNotIn(str((Path(temp_dir) / "secrets" / "1.env").resolve()), command)
-            self.assertIn("hermes-agents-home:/opt/agents:z", command)
+            self.assertIn("HERMES_HOME=/opt/data", command)
+            self.assertIn("type=volume,src=hermes-agents-home,dst=/opt/data,subpath=1", command)
             self.assertIn(f"{(ROOT / 'imageroot' / 'templates').resolve()}:/templates:ro,z", command)
             self.assertEqual(command[-2], "-c")
             self.assertEqual(command[-1], seed_action["SEED_SCRIPT"])
-            self.assertEqual(run_command.call_args.kwargs, {"check": True})
+            self.assertEqual(run_command.call_args_list[0].kwargs, {"check": True})
+            self.assertEqual(run_command.call_args_list[1].kwargs, {"check": True})
 
     def test_seed_agent_home_script_only_creates_missing_files(self):
         with mock.patch("sys.stdin", io.StringIO("{}")):
