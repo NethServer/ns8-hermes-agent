@@ -142,7 +142,7 @@ Build the module image, auth proxy image, Hermes wrapper image, and socket relay
 bash build-images.sh
 ```
 
-The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.4.30`. The wrapper no longer patches or rebuilds dashboard web sources at startup; it bootstraps the Hermes home and points `HERMES_WEB_DIST` at the bundled upstream `web_dist` when present.
+The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.5.7`. The wrapper no longer patches or rebuilds dashboard web sources at startup; it bootstraps the Hermes home and points `HERMES_WEB_DIST` at the bundled upstream `web_dist` when present.
 
 The script uses:
 
