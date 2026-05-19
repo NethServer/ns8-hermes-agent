@@ -26,7 +26,7 @@ The module publishes:
 
 - `ghcr.io/nethserver/hermes-agent`: the NS8 module image
 - `ghcr.io/nethserver/hermes-agent-auth`: the shared dashboard auth proxy image
-- `ghcr.io/nethserver/hermes-agent-hermes`: the Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.5.7`
+- `ghcr.io/nethserver/hermes-agent-hermes`: the Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.5.16`
 - `ghcr.io/nethserver/hermes-agent-socket`: the per-agent dashboard socket relay image
 
 `build-images.sh` builds all four images.
@@ -110,7 +110,7 @@ Rules:
 Module-wide state:
 
 - `environment`
-- `secrets.env`
+- `secrets/shared.env`
 
 Per-agent state files:
 
@@ -118,13 +118,13 @@ Per-agent state files:
 - `agents/<id>/agent.env`
 - `secrets/<id>.env`
 
-Per-agent Podman volume:
+Shared Podman volume:
 
-- `hermes-agent-<id>-home`, mounted at `/opt/data`
-- bootstrap-managed content inside the volume includes the seeded `SOUL.md`, `.env`, and `config.yaml`, plus the runtime directory skeleton used by Hermes
+- `hermes-agents-home`, mounted as a shared named volume with one live Hermes home subdir per agent at `/opt/data` and the full volume available at `/opt/agents` for maintenance flows
+- bootstrap-managed content inside each per-agent subdir includes the seeded `SOUL.md`, `.env`, and `config.yaml`, plus the runtime directory skeleton used by Hermes
 - ownership is repaired by a one-shot root helper from the configured Hermes image so `/opt/data` matches that image's dynamic `hermes` UID/GID rather than a hardcoded UID
 
-The active managed Traefik route instance is `<module_id>-hermes-auth`. Hermes home volume names are `hermes-agent-<id>-home`.
+The active managed Traefik route instance is `<module_id>-hermes-auth`. The shared Hermes home volume name is `hermes-agents-home`.
 
 Shared auth state files (generated, not backed up):
 
@@ -135,9 +135,9 @@ Shared auth state files (generated, not backed up):
 Shared SMTP values come from `discover-smarthost`:
 
 - public SMTP keys are merged into `environment`
-- `SMTP_PASSWORD` is written into `secrets.env`
+- `SMTP_PASSWORD` is written into `secrets/shared.env`
 
-`sync-agent-runtime` copies the relevant shared SMTP values into each generated Hermes env file and per-agent secrets file, generates the shared auth runtime files, and ensures `HERMES_AUTH_SESSION_SECRET` exists in `secrets.env`.
+`sync-agent-runtime` copies the relevant shared SMTP values into each generated Hermes env file and per-agent secrets file, generates the shared auth runtime files, and ensures `HERMES_AUTH_SESSION_SECRET` exists in `secrets/shared.env`.
 When `USER_DOMAIN` is configured, `sync-agent-runtime` also writes these public env keys into each generated `agents/<id>/agent.env` file:
 
 - `AGENT_ALLOWED_USER`
@@ -168,14 +168,14 @@ For agent `1`, the runtime looks like:
 - Podman pod: `hermes-pod-1`
 - Hermes container: `hermes-1`
 - dashboard socket relay container: `hermes-socket-1`
-- Hermes home named volume: `hermes-agent-1-home` mounted at `/opt/data`
+- shared Hermes home named volume: `hermes-agents-home`, with the live agent home mounted from the matching subdir at `/opt/data`
 - shared auth listener: `127.0.0.1:${TCP_PORT}` forwarded to auth proxy port `9119`
 - dashboard socket: `%S/state/dashboard-sockets/agent-1.sock`, mounted into the auth container as `/sockets/agent-1.sock`
 - shared auth proxy service: `hermes-auth.service`
 - Hermes auth proxy container: `hermes-auth`
 
 Restart supervision is owned by `hermes@<id>.service` and `hermes-auth.service`; `hermes@<id>.service` keeps `Restart=always` so in-agent `/restart` messages can restart the gateway, while sidecar/auth services use failure-oriented restart policies. The Podman pod and container launches do not set container-level restart policies.
-The services invoke Podman and the runtime creates one Podman-managed volume per agent. During module updates, `update-module.d/30ensure-agent-home-ownership` best-effort stops any active `hermes@<id>.service` and `hermes-socket@<id>.service` pair, resets failed state, and runs `ensure-agent-home-ownership` before `update-module.d/80restart` restarts the enabled `hermes@<id>.service`, `hermes-socket@<id>.service`, and `hermes-auth.service` units so the refreshed images are actually used.
+The services invoke Podman and the runtime uses one shared named volume, `hermes-agents-home`, with per-agent live homes mounted from subdirs under `/opt/data`. During module updates, `update-module.d/30ensure-agent-home-ownership` best-effort stops any active `hermes@<id>.service` and `hermes-socket@<id>.service` pair, resets failed state, and runs `ensure-agent-home-ownership` before `update-module.d/80restart` restarts the enabled `hermes@<id>.service`, `hermes-socket@<id>.service`, and `hermes-auth.service` units so the refreshed images are actually used.
 Managed `SOUL.md` and the default Hermes home `.env` are seeded in `configure-module/75seed-agent-home` before `hermes@<id>.service` starts. Later configure runs preserve existing files inside the volume.
 The Hermes container runs `hermes dashboard --host 127.0.0.1 --port 9120 --insecure --no-open -- gateway run` inside the pod. `hermes-socket@.service` joins the same pod, relays `127.0.0.1:9120` onto `%S/state/dashboard-sockets/agent-<id>.sock`, and the shared auth service mounts `%S/state/dashboard-sockets:/sockets:z`. The shared auth service listens on `9119`, authenticates access against the shared `user_domain` plus the generated `authproxy_agents.json` registry, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, and logs auth attempts plus outcomes to stdout while proxying to each agent's `upstream_socket`.
 The Hermes wrapper no longer patches or rebuilds the upstream dashboard sources at container start.
@@ -197,7 +197,7 @@ Seeding is strict first-write only: later agent edits preserve existing `SOUL.md
 ### `create-module`
 
 - loads JSON input and ignores its content
-- `10initialize-state`: persists `TIMEZONE` and creates `agents/` plus `secrets.env`
+- `10initialize-state`: persists `TIMEZONE` and creates `agents/` plus `secrets/shared.env`
 - `20discover-smarthost`: refreshes shared SMTP settings
 - does not create or start any agent runtime
 - relies on the module image label to reserve the shared auth listener `TCP_PORT`

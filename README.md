@@ -25,7 +25,7 @@ From dashboard, you can setup a Telegram and everything else, but Dashboard is s
 **Notes**:
 
 * the module does not support multiple agents with the same `allowed_user` value.
-* the Dashboard Web UI is build every time the container starts, so it takes a bit of time to be available after the agent service is started.
+* the Dashboard Web UI is bundled into the Hermes wrapper image at build time. After the agent service starts, availability depends on the Hermes runtime booting, not on a fresh dashboard rebuild.
 * after changing the configuration from dashboard, the agent service needs to be restarted to apply the new configuration. At the moment it can be done with the /restart command, but the first time you configure a messaging platform you need to restart the service from terminal with `systemctl --user restart hermes@<id>.service` or saving changes from NS8 ui
 * At the moment, saving changes from NS8 UI restart all the agents, but in the future we will implement a smarter logic to restart only the agent that needs it.
 
@@ -114,7 +114,7 @@ Module-wide files:
 Per-agent files:
 
 - `agents/<id>/metadata.json`
-- `agent_<id>.env`
+- `agents/<id>/agent.env`
 - `secrets/<id>.env`
 
 Shared Podman volume:
@@ -142,7 +142,7 @@ Build the module image, auth proxy image, Hermes wrapper image, and socket relay
 bash build-images.sh
 ```
 
-The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.5.7`. The wrapper no longer patches or rebuilds dashboard web sources at startup; it bootstraps the Hermes home and points `HERMES_WEB_DIST` at the bundled upstream `web_dist` when present.
+The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.5.16`. The wrapper no longer patches or rebuilds dashboard web sources at startup; it bootstraps the Hermes home and points `HERMES_WEB_DIST` at the bundled upstream `web_dist` when present.
 
 The script uses:
 
@@ -194,7 +194,7 @@ api-cli run module/hermes-agent1/configure-module --data '{"base_virtualhost":"a
 That configuration will:
 
 - store `agents/1/metadata.json`
-- generate `agent_1.env` and `agent_1_secrets.env`
+- generate `agents/1/agent.env` and `secrets/1.env`
 - bind the module to the selected NS8 user domain and validate `allowed_user` against that domain
 - run a one-shot `podman run --entrypoint /bin/sh` seed step that mounts `hermes-agents-home:/opt/agents`, mounts the checked-in templates at `/templates`, and creates `/opt/agents/1/SOUL.md` plus `/opt/agents/1/.env` only when they do not already exist
 - create or update the shared Traefik route for `https://agents.example.org/`
@@ -260,9 +260,9 @@ Shared publishing also runs:
 - one shared Hermes dashboard auth container: `hermes-auth`
 
 Restart supervision is owned by the systemd user units; `hermes@<id>.service` uses `Restart=always` so in-agent `/restart` messages can cycle the gateway, while sidecar/auth services use failure-oriented restart policies. Podman pod and container launches do not set container-level restart policies.
-The shipped services mount the shared `hermes-agents-home` volume at `/opt/agents`, with `HERMES_HOME=/opt/agents/<id>` set per agent.
+The shipped services mount the shared `hermes-agents-home` volume twice: the whole volume at `/opt/agents` for maintenance flows and the per-agent subdir at `/opt/data` for the live Hermes home. Inside the running Hermes container, `HERMES_HOME` defaults to `/opt/data`.
 Managed `SOUL.md` and home `.env` seeding runs before service start in `configure-module/75seed-agent-home`; later agent edits preserve existing files inside the volume.
-The Hermes container reads `agent_<id>.env` and `secrets/<id>.env`, mounts the shared home volume, and runs `hermes gateway run` inside the pod. The per-agent socket sidecar relays that listener onto `%S/state/dashboard-sockets/agent-<id>.sock`. The shared auth proxy container reads `authproxy.env`, `authproxy_secrets.env`, and `authproxy_agents.json`, mounts `%S/state/dashboard-sockets:/sockets:z`, authenticates the shared route against LDAP, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, logs auth events to stdout, and proxies requests to the assigned per-agent `upstream_socket`.
+The Hermes container reads `agents/<id>/agent.env` and `secrets/<id>.env`, mounts the shared home volume, and runs `hermes gateway run` inside the pod. The per-agent socket sidecar relays that listener onto `%S/state/dashboard-sockets/agent-<id>.sock`. The shared auth proxy container reads `authproxy.env`, `authproxy_secrets.env`, and `authproxy_agents.json`, mounts `%S/state/dashboard-sockets:/sockets:z`, authenticates the shared route against LDAP, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, logs auth events to stdout, and proxies requests to the assigned per-agent `upstream_socket`.
 If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/` directly to the shared auth proxy listener. No per-agent path route, `strip_prefix`, or `X-Forwarded-Prefix` header is required.
 
 ## UI development
@@ -299,9 +299,9 @@ The checked-in tests cover the pruned contract:
 
 - install produces no active agent runtime
 - zero agents keeps the module idle
-- one started agent produces one pod, three services, two containers, one auth-proxied route with the configured shared TLS mode, one isolated volume, and one isolated generated file set
-- stopping an agent disables the runtime without deleting its generated files or volume
-- removing an agent cleans the runtime files and volume
+- one started agent produces one pod, three services, two containers, one auth-proxied route with the configured shared TLS mode, one per-agent subdir inside the shared volume, and one isolated generated file set
+- stopping an agent disables the runtime without deleting its generated files or shared-volume subdir
+- removing an agent cleans the runtime files and its shared-volume subdir
 - removing the module cleans the instance state
 
 ## Uninstall
