@@ -1510,7 +1510,10 @@ class HermesModuleStateTest(unittest.TestCase):
         ownership_script = command[-1]
         self.assertIn("id -u hermes", ownership_script)
         self.assertIn("id -g hermes", ownership_script)
+        self.assertIn("chown \"$uid:$gid\" \"$root_dir\"", ownership_script)
         self.assertIn("chown -R", ownership_script)
+        self.assertIn("root_dir=\"/opt/agents\"", ownership_script)
+        self.assertIn("agent_dir=\"${root_dir}/${AGENT_ID}\"", ownership_script)
         self.assertNotIn("10000", ownership_script)
         self.assertNotIn("hermes update", ownership_script)
 
