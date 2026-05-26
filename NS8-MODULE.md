@@ -20,6 +20,14 @@ The implementation keeps the module lifecycle explicit:
 - `get-agent-runtime`: report live per-agent runtime state derived from systemd
 - `destroy-module`: stop services, remove managed routes, and remove generated state
 
+## Podman compatibility
+
+The current runtime layout requires Podman volume `subpath` support.
+
+It is used both when seeding a new agent home and when mounting the per-agent subdirectory from the shared `hermes-agents-home` volume into the live `hermes@<id>` service. Older Podman releases that do not support `subpath` are therefore unsupported by design.
+
+Known example: Debian 12's stock Podman 4.3.x is too old and fails with `subpath: invalid mount option` during agent creation.
+
 ## Images
 
 The module publishes:
