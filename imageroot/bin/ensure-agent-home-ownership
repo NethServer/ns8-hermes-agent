@@ -10,11 +10,17 @@ OWNERSHIP_SCRIPT = r'''
 uid="$(id -u hermes)"
 gid="$(id -g hermes)"
 desired_owner="${uid}:${gid}"
-agent_dir="/opt/agents/${AGENT_ID}"
+root_dir="/opt/agents"
+agent_dir="${root_dir}/${AGENT_ID}"
 marker="${agent_dir}/.ns8-hermes-agent-owner"
 current_owner=""
 
 mkdir -p "$agent_dir"
+
+root_owner="$(stat -c '%u:%g' "$root_dir")"
+if [ "$root_owner" != "$desired_owner" ]; then
+  chown "$uid:$gid" "$root_dir"
+fi
 
 if [ -f "$marker" ]; then
   current_owner="$(cat "$marker" || true)"
