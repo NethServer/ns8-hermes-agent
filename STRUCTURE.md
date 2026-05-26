@@ -26,6 +26,7 @@ This document maps the current layout.
 
 ### `imageroot/actions/`
 
+- `create-module/05check-podman-version`: fails early when the installed Podman release is too old for the runtime's required volume `subpath` mounts.
 - `create-module/10initialize-state`: initializes `TIMEZONE` and creates the base state directory and shared secrets file.
 - `create-module/20discover-smarthost`: refreshes shared SMTP settings after initialization.
 - `configure-module/10validate-input`: validates the submitted `base_virtualhost`, optional shared `user_domain`, optional shared `lets_encrypt`, and agent list including per-agent `allowed_user`.

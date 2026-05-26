@@ -956,6 +956,10 @@ class HermesModuleStateTest(unittest.TestCase):
                 {"TIMEZONE": " Europe/Rome "},
                 clear=True,
             ), mock.patch("subprocess.run") as run_command:
+                run_command.side_effect = [
+                    subprocess.CompletedProcess(["podman", "version"], 0, stdout="5.1.2\n"),
+                    subprocess.CompletedProcess(["runagent", "discover-smarthost"], 0),
+                ]
                 run_action(CREATE_MODULE_ACTION_DIR)
                 self.assertTrue(Path(temp_dir, "agents").is_dir())
                 self.assertTrue(Path(temp_dir, "secrets").is_dir())
@@ -967,7 +971,39 @@ class HermesModuleStateTest(unittest.TestCase):
                 del sys.modules["agent"]
 
         agent_stub.set_env.assert_called_once_with("TIMEZONE", "Europe/Rome")
-        run_command.assert_called_once_with(["runagent", "discover-smarthost"], check=True)
+        self.assertEqual(run_command.call_args_list[0], mock.call(["podman", "version", "--format", "{{.Client.Version}}"], check=True, capture_output=True, text=True))
+        self.assertEqual(run_command.call_args_list[1], mock.call(["runagent", "discover-smarthost"], check=True))
+
+    def test_create_module_rejects_old_podman_before_initializing_state(self):
+        original_agent = sys.modules.get("agent")
+        agent_stub = types.ModuleType("agent")
+        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
+        sys.modules["agent"] = agent_stub
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch.dict(
+                os.environ,
+                {"TIMEZONE": "UTC"},
+                clear=True,
+            ), mock.patch("subprocess.run") as run_command:
+                run_command.return_value = subprocess.CompletedProcess(
+                    ["podman", "version"],
+                    0,
+                    stdout="4.3.1\n",
+                )
+                with self.assertRaisesRegex(RuntimeError, r"Podman 5\.1 or newer is required.*4\.3\.1"):
+                    run_action(CREATE_MODULE_ACTION_DIR)
+
+                self.assertFalse(Path(temp_dir, "agents").exists())
+                self.assertFalse(Path(temp_dir, "secrets").exists())
+        finally:
+            if original_agent is not None:
+                sys.modules["agent"] = original_agent
+            else:
+                del sys.modules["agent"]
+
+        agent_stub.set_env.assert_not_called()
+        run_command.assert_called_once_with(["podman", "version", "--format", "{{.Client.Version}}"], check=True, capture_output=True, text=True)
 
     def test_create_module_rejects_symlinked_state_paths(self):
         original_agent = sys.modules.get("agent")
@@ -980,7 +1016,12 @@ class HermesModuleStateTest(unittest.TestCase):
                 os.environ,
                 {"TIMEZONE": "UTC"},
                 clear=True,
-            ):
+            ), mock.patch("subprocess.run") as run_command:
+                run_command.return_value = subprocess.CompletedProcess(
+                    ["podman", "version"],
+                    0,
+                    stdout="5.1.2\n",
+                )
                 Path("target-dir").mkdir()
                 os.symlink("target-dir", "agents")
 
