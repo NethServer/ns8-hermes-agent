@@ -80,7 +80,7 @@ The current implementation is intentionally small:
 
 ## Current behavior
 
-- `create-module` seeds minimal module state in `environment`, `secrets/shared.env`, and `agents/`, records `TIMEZONE`, and discovers smarthost settings.
+- `create-module` first checks that the installed Podman release supports volume `subpath` mounts, then seeds minimal module state in `environment`, `secrets/shared.env`, and `agents/`, records `TIMEZONE`, and discovers smarthost settings.
 - `configure-module` validates the submitted agent list plus the shared dashboard virtualhost, optional shared `user_domain`, and optional `lets_encrypt` switch, binds the selected NS8 user domain when set, stores one metadata file per agent, generates per-agent runtime files plus shared auth runtime files, seeds first-time agent home content, reconciles the shared Traefik route, and enables or disables the corresponding `hermes@<id>.service` instances plus the shared `hermes-auth.service` when publishing is active.
 - `get-configuration` returns the shared `base_virtualhost`, the shared `user_domain`, the shared `lets_encrypt` setting, and the configured agents with their persisted desired `status` plus `allowed_user`.
 - `get-agent-runtime` returns live per-agent `runtime_status` derived from the current systemd service state.

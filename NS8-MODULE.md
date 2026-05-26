@@ -205,6 +205,7 @@ Seeding is strict first-write only: later agent edits preserve existing `SOUL.md
 ### `create-module`
 
 - loads JSON input and ignores its content
+- `05check-podman-version`: rejects Podman releases older than 5.1 before any state is initialized, with a clear error that the module requires volume `subpath` mounts
 - `10initialize-state`: persists `TIMEZONE` and creates `agents/` plus `secrets/shared.env`
 - `20discover-smarthost`: refreshes shared SMTP settings
 - does not create or start any agent runtime
