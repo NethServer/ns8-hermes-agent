@@ -1285,9 +1285,16 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertEqual(agent_secrets["LDAP_BIND_PASSWORD"], "ldap-secret")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "secret-pass")
             self.assertTrue(agent_secrets["HERMES_AGENT_SECRET"])
+            self.assertTrue(agent_secrets["API_SERVER_KEY"])
             self.assertEqual(
                 set(agent_secrets),
-                {"HERMES_AGENT_SECRET", "LDAP_BIND_DN", "LDAP_BIND_PASSWORD", "SMTP_PASSWORD"},
+                {
+                    "API_SERVER_KEY",
+                    "HERMES_AGENT_SECRET",
+                    "LDAP_BIND_DN",
+                    "LDAP_BIND_PASSWORD",
+                    "SMTP_PASSWORD",
+                },
             )
             self.assertEqual(authproxy_env["USER_DOMAIN"], "example.org")
             self.assertEqual(authproxy_env["LDAP_HOST"], "10.0.2.2")
@@ -1353,7 +1360,45 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertEqual(public_env["AGENT_NAME"], "Alice User")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "secret-pass")
             self.assertTrue(agent_secrets["HERMES_AGENT_SECRET"])
+            self.assertTrue(agent_secrets["API_SERVER_KEY"])
             self.assertTrue(read_envfile(Path("authproxy_secrets.env"))["HERMES_AUTH_SESSION_SECRET"])
+
+    def test_sync_agent_runtime_files_generates_unique_api_server_keys_per_agent(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            for agent_id, name in ((1, "Alice User"), (2, "Bob User")):
+                self.state.write_jsonfile(
+                    Path("agents") / str(agent_id) / "metadata.json",
+                    {
+                        "id": agent_id,
+                        "name": name,
+                        "role": "developer",
+                        "status": "start",
+                        "allowed_user": "",
+                    },
+                )
+
+            write_envfile(self.state.ENVIRONMENT_FILE, {"TIMEZONE": "UTC"})
+            write_envfile(self.state.SHARED_SECRETS_ENVFILE, {})
+
+            with mock.patch.object(
+                self.sync.agent,
+                "read_envfile",
+                side_effect=strict_read_envfile,
+                create=True,
+            ), mock.patch.object(
+                self.sync.agent,
+                "write_envfile",
+                side_effect=write_envfile,
+                create=True,
+            ):
+                self.sync.sync_agent_runtime_files()
+
+            first_agent_secrets = read_envfile(self.state.SECRETS_DIR / "1.env")
+            second_agent_secrets = read_envfile(self.state.SECRETS_DIR / "2.env")
+
+            self.assertTrue(first_agent_secrets["API_SERVER_KEY"])
+            self.assertTrue(second_agent_secrets["API_SERVER_KEY"])
+            self.assertNotEqual(first_agent_secrets["API_SERVER_KEY"], second_agent_secrets["API_SERVER_KEY"])
 
     def test_sync_agent_runtime_files_preserves_generated_agent_secret_on_rerun(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -1392,8 +1437,9 @@ class HermesModuleStateTest(unittest.TestCase):
 
             agent_secrets = read_envfile(self.state.SECRETS_DIR / "3.env")
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], first_sync_secrets["HERMES_AGENT_SECRET"])
+            self.assertEqual(agent_secrets["API_SERVER_KEY"], first_sync_secrets["API_SERVER_KEY"])
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
-            self.assertEqual(set(agent_secrets), {"HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
+            self.assertEqual(set(agent_secrets), {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
 
     def test_seed_agent_home_action_uses_public_envfile_and_templates_mount(self):
         with mock.patch("sys.stdin", io.StringIO("{}")):
@@ -1936,6 +1982,7 @@ class HermesModuleStateTest(unittest.TestCase):
             write_envfile(
                 self.state.SECRETS_DIR / "3.env",
                 {
+                    "API_SERVER_KEY": "api-server-key",
                     "HERMES_AGENT_SECRET": "preserved",
                     "SMTP_PASSWORD": "old-pass",
                 },
@@ -1951,9 +1998,10 @@ class HermesModuleStateTest(unittest.TestCase):
                 self.sync.sync_agent_runtime_files(agent_id=3)
 
             agent_secrets = read_envfile(self.state.SECRETS_DIR / "3.env")
+            self.assertEqual(agent_secrets["API_SERVER_KEY"], "api-server-key")
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], "preserved")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
-            self.assertEqual(set(agent_secrets), {"HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
+            self.assertEqual(set(agent_secrets), {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
 
     def test_configure_module_reconciles_removed_and_started_agents(self):
         original_agent = sys.modules.get("agent")

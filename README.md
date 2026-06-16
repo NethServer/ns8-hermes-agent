@@ -116,7 +116,7 @@ Per-agent files:
 
 - `agents/<id>/metadata.json`
 - `agents/<id>/agent.env`
-- `secrets/<id>.env`
+- `secrets/<id>.env`, including a generated per-agent `API_SERVER_KEY` plus other private runtime values as needed
 
 Shared Podman volume:
 
@@ -263,7 +263,7 @@ Shared publishing also runs:
 Restart supervision is owned by the systemd user units; `hermes@<id>.service` uses `Restart=always` so in-agent `/restart` messages can cycle the gateway, while sidecar/auth services use failure-oriented restart policies. Podman pod and container launches do not set container-level restart policies.
 The shipped services mount the shared `hermes-agents-home` volume twice: the whole volume at `/opt/agents` for maintenance flows and the per-agent subdir at `/opt/data` for the live Hermes home. Inside the running Hermes container, `HERMES_HOME` defaults to `/opt/data`.
 Managed `SOUL.md` and home `.env` seeding runs before service start in `configure-module/75seed-agent-home`; later agent edits preserve existing files inside the volume.
-The Hermes container reads `agents/<id>/agent.env` and `secrets/<id>.env`, mounts the shared home volume, and runs `hermes gateway run` inside the pod. The per-agent socket sidecar relays that listener onto `%S/state/dashboard-sockets/agent-<id>.sock`. The shared auth proxy container reads `authproxy.env`, `authproxy_secrets.env`, and `authproxy_agents.json`, mounts `%S/state/dashboard-sockets:/sockets:z`, authenticates the shared route against LDAP, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, logs auth events to stdout, and proxies requests to the assigned per-agent `upstream_socket`.
+The Hermes container reads `agents/<id>/agent.env` and `secrets/<id>.env`, including the generated per-agent `API_SERVER_KEY`, mounts the shared home volume, and runs `hermes gateway run` inside the pod. The per-agent socket sidecar relays that listener onto `%S/state/dashboard-sockets/agent-<id>.sock`. The shared auth proxy container reads `authproxy.env`, `authproxy_secrets.env`, and `authproxy_agents.json`, mounts `%S/state/dashboard-sockets:/sockets:z`, authenticates the shared route against LDAP, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, logs auth events to stdout, and proxies requests to the assigned per-agent `upstream_socket`.
 If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/` directly to the shared auth proxy listener. No per-agent path route, `strip_prefix`, or `X-Forwarded-Prefix` header is required.
 
 ## UI development
