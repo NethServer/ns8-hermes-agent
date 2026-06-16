@@ -20,6 +20,20 @@ The implementation keeps the module lifecycle explicit:
 - `get-agent-runtime`: report live per-agent runtime state derived from systemd
 - `destroy-module`: stop services, remove managed routes, and remove generated state
 
+## NS8 guideline alignment
+
+The checked-in behavior follows the normal NS8 module model: rootless module payload in `imageroot/`, administrator UI in `ui/`, long-running services managed by user systemd units, public HTTP through Traefik, and lifecycle automation in numbered action steps.
+
+Action steps keep the NS8 contract: stdin JSON, machine-readable stdout for public read actions, diagnostics on stderr, JSON schemas beside public actions, idempotent configure/destroy/restore behavior, and early validation failures that report `validation-failed`.
+
+Important module-specific exceptions:
+
+- Hermes runtime isolation uses `secrets/shared.env` plus `secrets/<id>.env` files instead of one generic `secrets.env`.
+- The module is not a service provider and does not publish `srv` Redis keys.
+- The module exposes no direct public TCP/UDP firewall service; Traefik forwards to one loopback auth listener reserved by `TCP_PORT`.
+- No user-domain change event handler is currently shipped. Changes to LDAP relation details are reconciled by running `configure-module` again.
+- No Redis dump/restore action is needed because the canonical restored state is in files and the shared Podman volume.
+
 ## Podman compatibility
 
 The current runtime layout requires Podman volume `subpath` support.
@@ -39,7 +53,7 @@ The module publishes:
 
 `build-images.sh` builds all four images.
 
-The module image reserves one TCP port and declares `cluster:accountconsumer traefik@node:routeadm node:portsadm` authorizations so it can bind one NS8 user domain and publish one shared auth route.
+The module image reserves one TCP port and declares `cluster:accountconsumer traefik@node:routeadm node:portsadm` authorizations so it can bind one NS8 user domain, publish one shared auth route, and receive a loopback listener port. It intentionally does not request `node:fwadm` because no direct public firewall service is exposed.
 
 ## Input model
 
@@ -120,6 +134,8 @@ Module-wide state:
 - `environment`
 - `secrets/shared.env`
 
+`environment` stores non-secret module settings and core-managed image or port values. Secrets must stay in `secrets/shared.env`, generated per-agent `secrets/<id>.env`, or generated shared auth secret files, and must not be printed to stdout, stderr, or logs.
+
 Per-agent state files:
 
 - `agents/<id>/metadata.json`
@@ -188,6 +204,8 @@ Managed `SOUL.md` and the default Hermes home `.env` are seeded in `configure-mo
 The Hermes container reads `agents/<id>/agent.env` and `secrets/<id>.env`, including the generated per-agent `API_SERVER_KEY`, and runs `hermes dashboard --host 127.0.0.1 --port 9120 --insecure --no-open -- gateway run` inside the pod. `hermes-socket@.service` joins the same pod, relays `127.0.0.1:9120` onto `%S/state/dashboard-sockets/agent-<id>.sock`, and the shared auth service mounts `%S/state/dashboard-sockets:/sockets:z`. The shared auth service listens on `9119`, authenticates access against the shared `user_domain` plus the generated `authproxy_agents.json` registry, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, and logs auth attempts plus outcomes to stdout while proxying to each agent's `upstream_socket`.
 The Hermes wrapper no longer patches or rebuilds the upstream dashboard sources at container start.
 If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/` to the shared auth listener on `TCP_PORT` using the route instance `<module>-hermes-auth`.
+
+The route is owned by `configure-module` because it depends on administrator input. `destroy-module` removes the managed route and performs one-time certificate cleanup when `lets_encrypt` was enabled. Backend traffic from Traefik to the module remains plaintext HTTP on loopback behind Traefik TLS termination.
 
 ## Template seeding
 
@@ -264,3 +282,5 @@ The checked-in tests cover:
 - stop the agent and verify inactive runtime with retained generated files and volume
 - remove the agent and verify cleanup, including volume removal
 - remove the module and verify instance cleanup
+
+When behavior changes, keep tests aligned with the NS8 lifecycle checklist: install, configure, route reachability, reconfigure, restart or service reconciliation, uninstall, validation failures, and secret non-disclosure where relevant. Do not weaken tests to match broken behavior.

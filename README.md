@@ -29,6 +29,7 @@ From dashboard, you can setup a Telegram and everything else, but Dashboard is s
 * the Dashboard Web UI is bundled into the Hermes wrapper image at build time. After the agent service starts, availability depends on the Hermes runtime booting, not on a fresh dashboard rebuild.
 * after changing the configuration from dashboard, the agent service needs to be restarted to apply the new configuration. At the moment it can be done with the /restart command, but the first time you configure a messaging platform you need to restart the service from terminal with `systemctl --user restart hermes@<id>.service` or saving changes from NS8 ui
 * At the moment, saving changes from NS8 UI restart all the agents, but in the future we will implement a smarter logic to restart only the agent that needs it.
+* If the selected NS8 user domain's connection details change outside this module, save the module configuration again from the NS8 UI to regenerate auth runtime files and restart the shared auth service.
 
 
 ## Command line
@@ -78,6 +79,8 @@ The current implementation is intentionally small:
 - The module supports at most 30 agents and reserves one TCP port for the shared auth listener.
 - The module is now an NS8 account consumer and can bind one shared `user_domain` plus one per-agent `allowed_user` for published dashboard authentication.
 
+The module follows the NS8 rootless model: actions converge desired state, user systemd units own long-running containers, and Traefik owns public HTTP(S) routing. It intentionally uses `secrets/shared.env` plus per-agent `secrets/<id>.env` files instead of one generic secret env file, because each Hermes runtime needs isolated private values.
+
 ## Current behavior
 
 - `create-module` first checks that the installed Podman release supports volume `subpath` mounts, then seeds minimal module state in `environment`, `secrets/shared.env`, and `agents/`, records `TIMEZONE`, and discovers smarthost settings.
@@ -99,6 +102,8 @@ volumes/hermes-agents-home
 
 NS8 core uses this file to include the agent metadata, the secrets directory, and the shared home volume in restic snapshots. Derived auth proxy files are intentionally excluded because they can be regenerated from the restored shared environment, agent metadata, and secrets.
 
+The module does not own Redis service-discovery keys, so it does not need Redis dump/restore helper actions. It also does not publish direct public TCP/UDP firewall services; dashboard access remains behind Traefik and the loopback shared auth listener.
+
 After a restore, `restore-module/06copyenv` restores only Hermes-managed shared keys from `request['environment']` (`TIMEZONE`, `BASE_VIRTUALHOST`, `USER_DOMAIN`, `LETS_ENCRYPT`). Then `restore-module/20configure` reads the restored `agents/` tree and reruns `configure-module` so the module rebinds the user domain, regenerates derived runtime files (`agents/<id>/agent.env`, `authproxy.*`), reconciles routes, and recreates the expected services without a manual reconfigure.
 
 ## Generated state
@@ -111,6 +116,8 @@ Module-wide files:
 - `authproxy_secrets.env`
 - `authproxy_agents.json`
 - `dashboard-sockets/`
+
+`environment` contains non-secret module state. Secret values belong in `secrets/shared.env`, per-agent `secrets/<id>.env`, or generated auth proxy secret files, and should not appear in task output or logs.
 
 Per-agent files:
 
@@ -304,6 +311,8 @@ The checked-in tests cover the pruned contract:
 - stopping an agent disables the runtime without deleting its generated files or shared-volume subdir
 - removing an agent cleans the runtime files and its shared-volume subdir
 - removing the module cleans the instance state
+
+For behavior changes, keep the lifecycle tests aligned with install, configure, route reachability, reconfigure, service reconciliation, uninstall, validation failures, and secret non-disclosure where relevant.
 
 ## Uninstall
 

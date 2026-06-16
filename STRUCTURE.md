@@ -13,6 +13,9 @@ This document maps the current layout.
 - `build-images.sh`: builds the module image plus the auth proxy, Hermes wrapper, and socket relay component images.
 - `test-module.sh`: runs the module test suite.
 - `renovate.json`: Renovate configuration.
+- `.github/`: custom Copilot agents, repository skills, and GitHub Actions workflows.
+
+There is no `.devcontainer/` directory in the current tree.
 
 ## `imageroot/`
 
@@ -24,7 +27,21 @@ This document maps the current layout.
 
 - `state-include.conf`: declares the backup scope consumed by NS8 core: `state/agents`, `state/secrets`, and `volumes/hermes-agents-home`. Derived auth proxy files are regenerated after restore and are intentionally excluded.
 
+There is no `state-exclude.conf` because the current backup scope is explicit and narrow.
+
+### Runtime state layout
+
+- `state/environment`: shared non-secret module environment, including core-managed image references and the reserved `TCP_PORT`.
+- `state/secrets/shared.env`: module-wide secrets such as shared SMTP and auth proxy private values.
+- `state/secrets/<id>.env`: generated per-agent Hermes secrets, including `API_SERVER_KEY` and LDAP bind values when a user domain is configured.
+- `state/agents/<id>/metadata.json`: canonical per-agent desired configuration.
+- `state/agents/<id>/agent.env`: generated per-agent public runtime environment.
+- `state/authproxy.env`, `state/authproxy_secrets.env`, `state/authproxy_agents.json`, and `state/dashboard-sockets/`: generated shared auth runtime files that are intentionally regenerated rather than backed up.
+- `volumes/hermes-agents-home`: shared Podman volume with one Hermes home subdir per agent.
+
 ### `imageroot/actions/`
+
+Action directories contain numbered executable steps plus JSON schemas for public input and output where needed. Steps read stdin JSON through the NS8 action contract, write machine-readable output on stdout for read actions, write diagnostics to stderr, and keep semantic validation near the beginning of the action flow.
 
 - `create-module/05check-podman-version`: fails early when the installed Podman release is too old for the runtime's required volume `subpath` mounts.
 - `create-module/10initialize-state`: initializes `TIMEZONE` and creates the base state directory and shared secrets file.
@@ -58,6 +75,8 @@ This document maps the current layout.
 - `restore-module/06copyenv`: restores only Hermes-managed shared keys from `request['environment']` (`TIMEZONE`, `BASE_VIRTUALHOST`, `USER_DOMAIN`, `LETS_ENCRYPT`) and leaves core-managed values alone.
 - `restore-module/20configure`: reads the restored `agents/` tree and reruns `configure-module` so restore replays user-domain binding, derived runtime generation, route reconciliation, and service reconciliation from canonical restored state.
 
+Typical NS8 actions that are intentionally absent: `get-status`, which remains inherited from core, and Redis dump/restore helper actions, because this module does not own Redis service-discovery keys.
+
 ### `imageroot/bin/`
 
 - `discover-smarthost`: reads cluster smarthost settings and writes public values into `environment` and `SMTP_PASSWORD` into `secrets/shared.env`.
@@ -89,6 +108,8 @@ This document maps the current layout.
 - `hermes-auth.service`: shared authentication proxy service for the shared virtualhost.
 - `hermes-pod@.service`: per-agent pod owner unit that supplies the private pod network for Hermes and the socket relay sidecar.
 
+The user units own long-running container lifecycle through `systemctl --user`, use `%S/state` as the working directory, set `PODMAN_SYSTEMD_UNIT=%n`, run rootless Podman, bind the public auth listener only on `127.0.0.1:${TCP_PORT}`, and clean containers or pods through `ExecStop` / `ExecStopPost` paths.
+
 ### `imageroot/templates/`
 
 - `SOUL/`: checked-in role-specific templates used to seed managed `SOUL.md` content.
@@ -119,3 +140,23 @@ The embedded admin UI uses Vue 2 and Vue CLI.
 - `kickstart.robot`: end-to-end module lifecycle checks.
 - `pythonreq.txt`: Python dependencies for the test runner.
 - `test_runtime_validation.py`: focused unit tests for state helpers, configure-time seeding, route wiring, named-volume lifecycle, and the combined per-agent Hermes runtime contract.
+
+## Standard NS8 Data Flow
+
+`UI/API -> action stdin JSON -> validation -> environment/secret files/generated config -> systemd user unit -> rootless Podman container -> Traefik route`
+
+This module adds a shared auth proxy and per-agent Unix socket relay between Traefik and each Hermes dashboard. It does not publish provider `srv` Redis keys and does not expose direct public TCP/UDP firewall services.
+
+## `.github/`
+
+- `agents/researcher.agent.md`: research-only custom agent for resource-map lookup, upstream documentation checks, kickstart guideline comparison, and prior-art searches before implementation or documentation edits.
+- `agents/docs-maintainer.agent.md`: Markdown maintenance custom agent for keeping human-facing docs and agent-facing guidance aligned with code and NS8 conventions.
+- `skills/commit/SKILL.md`: Conventional Commit workflow for staging and committing intended changes.
+- `skills/update-hermes-image/SKILL.md`: focused workflow for changing the upstream Hermes wrapper image and synchronized tests/docs.
+- `workflows/build-apidoc.yml`: builds API documentation artifacts.
+- `workflows/clean-apidoc.yml`: cleans generated API documentation artifacts.
+- `workflows/clean-registry.yml`: deletes `ghcr.io` `hermes-agent` package images for deleted refs or manual cleanup runs.
+- `workflows/publish-images.yml`: publishes module and component images.
+- `workflows/test-module.yml`: resolves the published module image and delegates module tests to the DigitalOcean infrastructure workflow.
+- `workflows/test-on-digitalocean-infra.yml`: provisions NS8 test clusters on DigitalOcean and runs the selected test script.
+- `workflows/test-ui-build-renovate.yml`: validates UI build behavior for Renovate updates.
