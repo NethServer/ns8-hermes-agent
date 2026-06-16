@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
+from action_logging import log_action_failure
 from hermes_agent_state import AGENTS_HOME_MOUNT_DIR, AGENTS_HOME_VOLUME, HERMES_RUNTIME_HOME
 
 
@@ -149,9 +150,18 @@ def seed_agent_home(agent_id, templates_path):
     subprocess.run(command, check=True)
 
 
-request = json.load(sys.stdin)
-seed_ids = sorted(agent_data["id"] for agent_data in request.get("agents", []))
-templates_path = templates_dir()
+def main():
+  request = json.load(sys.stdin)
+  seed_ids = sorted(agent_data["id"] for agent_data in request.get("agents", []))
+  templates_path = templates_dir()
 
-for agent_id in seed_ids:
+  for agent_id in seed_ids:
     seed_agent_home(agent_id, templates_path)
+
+
+if __name__ == "__main__":
+  try:
+    main()
+  except Exception as error:
+    log_action_failure("configure-module/75seed-agent-home", error)
+    raise

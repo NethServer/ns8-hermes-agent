@@ -4,11 +4,20 @@ import json
 import sys
 from pathlib import Path
 
-request = json.load(sys.stdin)
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
+from action_logging import log_action_failure
 from hermes_user_domain import list_domain_users
 
 
-json.dump({"users": list_domain_users(request["domain"])}, fp=sys.stdout)
+def main():
+	request = json.load(sys.stdin)
+	json.dump({"users": list_domain_users(request["domain"])}, fp=sys.stdout)
+
+
+if __name__ == "__main__":
+	try:
+		main()
+	except Exception as error:
+		log_action_failure("list-domain-users/10read", error)
+		raise

@@ -2,6 +2,19 @@
 
 import json
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
+
+from action_logging import log_action_failure
+
+def main():
+	json.load(sys.stdin)
 
 
-json.load(sys.stdin)
+if __name__ == "__main__":
+	try:
+		main()
+	except Exception as error:
+		log_action_failure("configure-module/30remove-deleted-routes", error)
+		raise

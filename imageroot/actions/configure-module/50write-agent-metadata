@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
+from action_logging import log_action_failure
 from hermes_agent_state import AGENTS_DIR, ensure_private_directory, write_jsonfile
 
 
@@ -26,9 +27,18 @@ def normalize_agents(raw_agents):
     return sorted(normalized_agents, key=lambda agent_data: agent_data["id"])
 
 
-request = json.load(sys.stdin)
+def main():
+    request = json.load(sys.stdin)
 
-ensure_private_directory(AGENTS_DIR)
+    ensure_private_directory(AGENTS_DIR)
 
-for agent_data in normalize_agents(request.get("agents", [])):
-    write_jsonfile(AGENTS_DIR / str(agent_data["id"]) / "metadata.json", agent_data)
+    for agent_data in normalize_agents(request.get("agents", [])):
+        write_jsonfile(AGENTS_DIR / str(agent_data["id"]) / "metadata.json", agent_data)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("configure-module/50write-agent-metadata", error)
+        raise

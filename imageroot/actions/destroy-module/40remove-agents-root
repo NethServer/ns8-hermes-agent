@@ -7,10 +7,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
+from action_logging import log_action_failure
 from hermes_agent_state import AGENTS_DIR
 
 
-json.load(sys.stdin)
+def main():
+    json.load(sys.stdin)
 
-if AGENTS_DIR.exists():
-    shutil.rmtree(AGENTS_DIR, ignore_errors=True)
+    if AGENTS_DIR.exists():
+        shutil.rmtree(AGENTS_DIR, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("destroy-module/40remove-agents-root", error)
+        raise

@@ -9,6 +9,7 @@ import agent
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
+from action_logging import log_action_failure
 from hermes_agent_state import (
     BASE_VIRTUALHOST_ENV,
     BASE_VIRTUALHOST_PREVIOUS_ENV,
@@ -27,47 +28,55 @@ def normalize_base_virtualhost(value):
     return (value or "").strip().lower()
 
 
-request = json.load(sys.stdin)
-current_base_virtualhost = normalize_base_virtualhost(os.getenv(BASE_VIRTUALHOST_ENV))
-current_lets_encrypt = env_to_bool(os.getenv(LETS_ENCRYPT_ENV))
-base_virtualhost_changed = False
+def main():
+    request = json.load(sys.stdin)
+    current_base_virtualhost = normalize_base_virtualhost(os.getenv(BASE_VIRTUALHOST_ENV))
+    current_lets_encrypt = env_to_bool(os.getenv(LETS_ENCRYPT_ENV))
+    base_virtualhost_changed = False
 
-if "base_virtualhost" in request:
-    base_virtualhost = normalize_base_virtualhost(request.get("base_virtualhost"))
-    base_virtualhost_changed = base_virtualhost != current_base_virtualhost
-    # Keep the previous host only long enough for route reconciliation to
-    # remove the old Traefik/TLS state after a host change.
-    if current_base_virtualhost and base_virtualhost != current_base_virtualhost:
-        agent.set_env(BASE_VIRTUALHOST_PREVIOUS_ENV, current_base_virtualhost)
+    if "base_virtualhost" in request:
+        base_virtualhost = normalize_base_virtualhost(request.get("base_virtualhost"))
+        base_virtualhost_changed = base_virtualhost != current_base_virtualhost
+        # Keep the previous host only long enough for route reconciliation to
+        # remove the old Traefik/TLS state after a host change.
+        if current_base_virtualhost and base_virtualhost != current_base_virtualhost:
+            agent.set_env(BASE_VIRTUALHOST_PREVIOUS_ENV, current_base_virtualhost)
+        else:
+            agent.unset_env(BASE_VIRTUALHOST_PREVIOUS_ENV)
+        if base_virtualhost:
+            agent.set_env(BASE_VIRTUALHOST_ENV, base_virtualhost)
+        else:
+            agent.unset_env(BASE_VIRTUALHOST_ENV)
     else:
         agent.unset_env(BASE_VIRTUALHOST_PREVIOUS_ENV)
-    if base_virtualhost:
-        agent.set_env(BASE_VIRTUALHOST_ENV, base_virtualhost)
+
+    if "user_domain" in request:
+        user_domain = normalize_user_domain(request.get("user_domain"))
+        if user_domain:
+            agent.set_env(USER_DOMAIN_ENV, user_domain)
+        else:
+            agent.unset_env(USER_DOMAIN_ENV)
+
+    if "lets_encrypt" in request:
+        lets_encrypt = request.get("lets_encrypt") is True
+        agent.set_env(LETS_ENCRYPT_ENV, bool_to_env(lets_encrypt))
     else:
-        agent.unset_env(BASE_VIRTUALHOST_ENV)
-else:
-    agent.unset_env(BASE_VIRTUALHOST_PREVIOUS_ENV)
+        lets_encrypt = current_lets_encrypt
 
-if "user_domain" in request:
-    user_domain = normalize_user_domain(request.get("user_domain"))
-    if user_domain:
-        agent.set_env(USER_DOMAIN_ENV, user_domain)
+    # Record the prior TLS mode when later steps must decide whether to clean up
+    # certificates for a host that is being unpublished or downgraded.
+    if current_lets_encrypt != lets_encrypt or (base_virtualhost_changed and current_lets_encrypt):
+        agent.set_env(LETS_ENCRYPT_PREVIOUS_ENV, bool_to_env(current_lets_encrypt))
     else:
-        agent.unset_env(USER_DOMAIN_ENV)
+        agent.unset_env(LETS_ENCRYPT_PREVIOUS_ENV)
 
-if "lets_encrypt" in request:
-    lets_encrypt = request.get("lets_encrypt") is True
-    agent.set_env(LETS_ENCRYPT_ENV, bool_to_env(lets_encrypt))
-else:
+    if not os.getenv(TIMEZONE_ENV):
+        agent.set_env(TIMEZONE_ENV, TIMEZONE_DEFAULT)
 
-    lets_encrypt = current_lets_encrypt
 
-# Record the prior TLS mode when later steps must decide whether to clean up
-# certificates for a host that is being unpublished or downgraded.
-if current_lets_encrypt != lets_encrypt or (base_virtualhost_changed and current_lets_encrypt):
-    agent.set_env(LETS_ENCRYPT_PREVIOUS_ENV, bool_to_env(current_lets_encrypt))
-else:
-    agent.unset_env(LETS_ENCRYPT_PREVIOUS_ENV)
-
-if not os.getenv(TIMEZONE_ENV):
-    agent.set_env(TIMEZONE_ENV, TIMEZONE_DEFAULT)
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("configure-module/20persist-shared-env", error)
+        raise
