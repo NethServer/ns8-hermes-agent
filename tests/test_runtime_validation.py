@@ -1101,9 +1101,21 @@ class HermesModuleStateTest(unittest.TestCase):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
         self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.6.5", containerfile)
+        self.assertIn("COPY containers/hermes/entrypoint.sh /entrypoint.sh", containerfile)
+        self.assertIn("COPY favicon.ico /tmp/favicon.ico", containerfile)
+        self.assertIn("/opt/hermes/hermes_cli/web_dist/favicon.ico", containerfile)
+        self.assertIn("/opt/hermes/web/public/favicon.ico", containerfile)
+        self.assertIn("/opt/hermes/website/static/img/favicon.ico", containerfile)
         self.assertNotIn("FROM docker.io/node:24.11.1-slim AS dashboard-builder", containerfile)
         self.assertNotIn("COPY patch_dashboard_source.py /opt/hermes/patch_dashboard_source.py", containerfile)
         self.assertNotIn("ns8-web-dist", containerfile)
+
+    def test_build_images_script_builds_hermes_from_repo_root_context(self):
+        build_script = BUILD_IMAGES_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('local containerfile_path="${3:-${context_dir}/Containerfile}"', build_script)
+        self.assertIn('--file "${containerfile_path}"', build_script)
+        self.assertIn('build_component_image "hermes-agent-hermes" "." "containers/hermes/Containerfile"', build_script)
 
     def test_auth_containerfile_installs_proxy_runtime(self):
         containerfile = AUTH_CONTAINERFILE_PATH.read_text(encoding="utf-8")
