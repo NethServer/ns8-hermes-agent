@@ -15,6 +15,7 @@ from hermes_agent_state import (
     AGENT_ALLOWED_USER_ENV,
     AGENTS_DIR,
     AGENT_PUBLIC_ENVFILE,
+    API_SERVER_SECRET_KEY,
     AUTH_SESSION_SECRET_KEY,
     AUTHPROXY_AGENTS_FILE,
     AUTHPROXY_ENVFILE,
@@ -60,6 +61,18 @@ def agent_by_id(agent_id):
     raise ValueError(f"agent {agent_id} not found")
 
 
+def existing_agent_api_server_keys(agent_data_list):
+    api_server_keys = {}
+
+    for agent_data in agent_data_list:
+        agent_secrets_path = SECRETS_DIR / Path(f"{agent_data['id']}.env")
+        api_server_key = (read_optional_envfile(agent_secrets_path).get(API_SERVER_SECRET_KEY) or "").strip()
+        if api_server_key:
+            api_server_keys[agent_data["id"]] = api_server_key
+
+    return api_server_keys
+
+
 def build_agent_public_env(agent_data, shared_environment):
     # Containers only consume generated per-agent env files, so copy the shared
     # public settings they need and overlay agent-specific fields here.
@@ -91,11 +104,27 @@ def build_agent_public_env(agent_data, shared_environment):
     return env_data
 
 
-def build_agent_secrets(existing_agent_secrets, shared_secrets, shared_environment):
+def build_agent_secrets(
+    existing_agent_secrets,
+    shared_secrets,
+    shared_environment,
+    reserved_api_server_keys=None,
+):
     # Preserve each agent secret across regenerations while still projecting the
     # current module-wide SMTP and LDAP bind credentials into the private file.
+    if reserved_api_server_keys is None:
+        reserved_api_server_keys = set()
+
+    api_server_key = (existing_agent_secrets.get(API_SERVER_SECRET_KEY) or "").strip()
+    if not api_server_key or api_server_key in reserved_api_server_keys:
+        while True:
+            api_server_key = generate_secret()
+            if api_server_key not in reserved_api_server_keys:
+                break
+
     env_data = {
         AGENT_SECRET_KEY: existing_agent_secrets.get(AGENT_SECRET_KEY) or generate_secret(),
+        API_SERVER_SECRET_KEY: api_server_key,
     }
 
     smtp_password = shared_secrets.get(SMTP_SECRET_KEY)
@@ -170,7 +199,9 @@ def build_authproxy_agents(shared_environment):
 def sync_agent_runtime_files(agent_id=None):
     shared_environment = agent.read_envfile("environment")
     shared_secrets = ensure_shared_session_secret(agent.read_envfile(SHARED_SECRETS_ENVFILE))
-    agent_data_list = [agent_by_id(agent_id)] if agent_id is not None else read_agents_from_state()
+    all_agent_data = read_agents_from_state()
+    agent_data_list = [agent_by_id(agent_id)] if agent_id is not None else all_agent_data
+    known_api_server_keys = existing_agent_api_server_keys(all_agent_data)
 
     agent.write_envfile(AUTHPROXY_ENVFILE, build_authproxy_env(shared_environment))
     agent.write_envfile(AUTHPROXY_SECRETS_ENVFILE, build_authproxy_secrets(shared_secrets, shared_environment))
@@ -188,7 +219,17 @@ def sync_agent_runtime_files(agent_id=None):
         )
         agent_secrets_path = SECRETS_DIR / Path(f"{agent_data['id']}.env")
         existing_agent_secrets = read_optional_envfile(agent_secrets_path)
-        agent_secrets = build_agent_secrets(existing_agent_secrets, shared_secrets, shared_environment)
+        agent_secrets = build_agent_secrets(
+            existing_agent_secrets,
+            shared_secrets,
+            shared_environment,
+            {
+                api_server_key
+                for existing_agent_id, api_server_key in known_api_server_keys.items()
+                if existing_agent_id != agent_data["id"]
+            },
+        )
+        known_api_server_keys[agent_data["id"]] = agent_secrets[API_SERVER_SECRET_KEY]
         agent.write_envfile(
             agent_secrets_path,
             agent_secrets,

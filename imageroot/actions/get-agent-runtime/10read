@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
+from action_logging import log_action_failure
 from hermes_agent_state import read_agents_from_state
 
 
@@ -22,19 +23,28 @@ def runtime_status(agent_id):
     return "start" if result.returncode == 0 else "stop"
 
 
-request = json.load(sys.stdin)
-if not isinstance(request, dict):
-    raise ValueError("get-agent-runtime input must be an object")
+def main():
+    request = json.load(sys.stdin)
+    if not isinstance(request, dict):
+        raise ValueError("get-agent-runtime input must be an object")
 
-json.dump(
-    {
-        "agents": [
-            {
-                "id": agent_data["id"],
-                "runtime_status": runtime_status(agent_data["id"]),
-            }
-            for agent_data in read_agents_from_state()
-        ]
-    },
-    fp=sys.stdout,
-)
+    json.dump(
+        {
+            "agents": [
+                {
+                    "id": agent_data["id"],
+                    "runtime_status": runtime_status(agent_data["id"]),
+                }
+                for agent_data in read_agents_from_state()
+            ]
+        },
+        fp=sys.stdout,
+    )
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("get-agent-runtime/10read", error)
+        raise

@@ -21,9 +21,11 @@ reponame="hermes-agent"
 build_component_image() {
     local image_name="$1"
     local context_dir="$2"
+    local containerfile_path="${3:-${context_dir}/Containerfile}"
 
     echo "Build ${image_name} container..."
     buildah build \
+        --file "${containerfile_path}" \
         --force-rm \
         --layers \
         --jobs "$(nproc)" \
@@ -58,7 +60,7 @@ buildah run \
     sh -c "yarn install && yarn build"
 
 build_component_image "hermes-agent-auth" "containers/auth"
-build_component_image "hermes-agent-hermes" "containers/hermes"
+build_component_image "hermes-agent-hermes" "." "containers/hermes/Containerfile"
 build_component_image "hermes-agent-socket" "containers/socket"
 
 # Add imageroot directory to the container image

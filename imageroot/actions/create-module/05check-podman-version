@@ -4,6 +4,11 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
+
+from action_logging import log_action_failure
 
 MIN_PODMAN_VERSION = (5, 1)
 MIN_PODMAN_VERSION_TEXT = ".".join(str(part) for part in MIN_PODMAN_VERSION)
@@ -22,19 +27,28 @@ def parse_podman_version(raw_version: str) -> tuple[int, int, int]:
     return (major, minor, patch)
 
 
-json.load(sys.stdin)
+def main():
+    json.load(sys.stdin)
 
-result = subprocess.run(
-    ["podman", "version", "--format", "{{.Client.Version}}"],
-    check=True,
-    capture_output=True,
-    text=True,
-)
-version_text = result.stdout.strip()
-version_tuple = parse_podman_version(version_text)
-
-if version_tuple[:2] < MIN_PODMAN_VERSION:
-    raise RuntimeError(
-        "Podman 5.1 or newer is required by ns8-hermes-agent because the runtime uses volume "
-        f"subpath mounts. Found Podman {version_text}. Upgrade Podman before installing the module."
+    result = subprocess.run(
+        ["podman", "version", "--format", "{{.Client.Version}}"],
+        check=True,
+        capture_output=True,
+        text=True,
     )
+    version_text = result.stdout.strip()
+    version_tuple = parse_podman_version(version_text)
+
+    if version_tuple[:2] < MIN_PODMAN_VERSION:
+        raise RuntimeError(
+            "Podman 5.1 or newer is required by ns8-hermes-agent because the runtime uses volume "
+            f"subpath mounts. Found Podman {version_text}. Upgrade Podman before installing the module."
+        )
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("create-module/05check-podman-version", error)
+        raise

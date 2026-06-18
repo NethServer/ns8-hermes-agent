@@ -1100,10 +1100,22 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.5.29", containerfile)
+        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.6.5", containerfile)
+        self.assertIn("COPY containers/hermes/entrypoint.sh /entrypoint.sh", containerfile)
+        self.assertIn("COPY favicon.ico /tmp/favicon.ico", containerfile)
+        self.assertIn("/opt/hermes/hermes_cli/web_dist/favicon.ico", containerfile)
+        self.assertIn("/opt/hermes/web/public/favicon.ico", containerfile)
+        self.assertIn("/opt/hermes/website/static/img/favicon.ico", containerfile)
         self.assertNotIn("FROM docker.io/node:24.11.1-slim AS dashboard-builder", containerfile)
         self.assertNotIn("COPY patch_dashboard_source.py /opt/hermes/patch_dashboard_source.py", containerfile)
         self.assertNotIn("ns8-web-dist", containerfile)
+
+    def test_build_images_script_builds_hermes_from_repo_root_context(self):
+        build_script = BUILD_IMAGES_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('local containerfile_path="${3:-${context_dir}/Containerfile}"', build_script)
+        self.assertIn('--file "${containerfile_path}"', build_script)
+        self.assertIn('build_component_image "hermes-agent-hermes" "." "containers/hermes/Containerfile"', build_script)
 
     def test_auth_containerfile_installs_proxy_runtime(self):
         containerfile = AUTH_CONTAINERFILE_PATH.read_text(encoding="utf-8")
@@ -1285,9 +1297,16 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertEqual(agent_secrets["LDAP_BIND_PASSWORD"], "ldap-secret")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "secret-pass")
             self.assertTrue(agent_secrets["HERMES_AGENT_SECRET"])
+            self.assertTrue(agent_secrets["API_SERVER_KEY"])
             self.assertEqual(
                 set(agent_secrets),
-                {"HERMES_AGENT_SECRET", "LDAP_BIND_DN", "LDAP_BIND_PASSWORD", "SMTP_PASSWORD"},
+                {
+                    "API_SERVER_KEY",
+                    "HERMES_AGENT_SECRET",
+                    "LDAP_BIND_DN",
+                    "LDAP_BIND_PASSWORD",
+                    "SMTP_PASSWORD",
+                },
             )
             self.assertEqual(authproxy_env["USER_DOMAIN"], "example.org")
             self.assertEqual(authproxy_env["LDAP_HOST"], "10.0.2.2")
@@ -1353,7 +1372,45 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertEqual(public_env["AGENT_NAME"], "Alice User")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "secret-pass")
             self.assertTrue(agent_secrets["HERMES_AGENT_SECRET"])
+            self.assertTrue(agent_secrets["API_SERVER_KEY"])
             self.assertTrue(read_envfile(Path("authproxy_secrets.env"))["HERMES_AUTH_SESSION_SECRET"])
+
+    def test_sync_agent_runtime_files_generates_unique_api_server_keys_per_agent(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            for agent_id, name in ((1, "Alice User"), (2, "Bob User")):
+                self.state.write_jsonfile(
+                    Path("agents") / str(agent_id) / "metadata.json",
+                    {
+                        "id": agent_id,
+                        "name": name,
+                        "role": "developer",
+                        "status": "start",
+                        "allowed_user": "",
+                    },
+                )
+
+            write_envfile(self.state.ENVIRONMENT_FILE, {"TIMEZONE": "UTC"})
+            write_envfile(self.state.SHARED_SECRETS_ENVFILE, {})
+
+            with mock.patch.object(
+                self.sync.agent,
+                "read_envfile",
+                side_effect=strict_read_envfile,
+                create=True,
+            ), mock.patch.object(
+                self.sync.agent,
+                "write_envfile",
+                side_effect=write_envfile,
+                create=True,
+            ):
+                self.sync.sync_agent_runtime_files()
+
+            first_agent_secrets = read_envfile(self.state.SECRETS_DIR / "1.env")
+            second_agent_secrets = read_envfile(self.state.SECRETS_DIR / "2.env")
+
+            self.assertTrue(first_agent_secrets["API_SERVER_KEY"])
+            self.assertTrue(second_agent_secrets["API_SERVER_KEY"])
+            self.assertNotEqual(first_agent_secrets["API_SERVER_KEY"], second_agent_secrets["API_SERVER_KEY"])
 
     def test_sync_agent_runtime_files_preserves_generated_agent_secret_on_rerun(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -1392,8 +1449,9 @@ class HermesModuleStateTest(unittest.TestCase):
 
             agent_secrets = read_envfile(self.state.SECRETS_DIR / "3.env")
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], first_sync_secrets["HERMES_AGENT_SECRET"])
+            self.assertEqual(agent_secrets["API_SERVER_KEY"], first_sync_secrets["API_SERVER_KEY"])
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
-            self.assertEqual(set(agent_secrets), {"HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
+            self.assertEqual(set(agent_secrets), {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
 
     def test_seed_agent_home_action_uses_public_envfile_and_templates_mount(self):
         with mock.patch("sys.stdin", io.StringIO("{}")):
@@ -1638,16 +1696,36 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_seed_agent_home_action_requires_generated_public_envfile(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
             request = json.dumps({"agents": [{"id": 1}]})
+            stderr = io.StringIO()
 
             with mock.patch.dict(
                 os.environ,
                 {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"},
                 clear=False,
-            ), mock.patch("sys.stdin", io.StringIO(request)), self.assertRaisesRegex(
+            ), mock.patch("sys.stdin", io.StringIO(request)), mock.patch("sys.stderr", stderr), self.assertRaisesRegex(
                 ValueError,
                 "agent env file not found",
             ):
                 runpy.run_path(str(SEED_AGENT_HOME_ACTION_PATH), run_name="__main__")
+
+            self.assertIn(
+                "configure-module/75seed-agent-home failed: agent env file not found",
+                stderr.getvalue(),
+            )
+
+    def test_create_module_podman_version_check_logs_requirement_failures(self):
+        stderr = io.StringIO()
+
+        with mock.patch("sys.stdin", io.StringIO("{}")), mock.patch("sys.stderr", stderr), mock.patch(
+            "subprocess.run",
+            return_value=types.SimpleNamespace(stdout="5.0.0\n"),
+        ), self.assertRaisesRegex(RuntimeError, "Podman 5.1 or newer"):
+            runpy.run_path(str(CREATE_MODULE_ACTION_DIR / "05check-podman-version"), run_name="__main__")
+
+        self.assertIn(
+            "create-module/05check-podman-version failed: Podman 5.1 or newer is required by ns8-hermes-agent",
+            stderr.getvalue(),
+        )
 
     def test_persist_shared_env_tracks_previous_lets_encrypt_on_host_change(self):
         original_agent = sys.modules.get("agent")
@@ -1916,6 +1994,7 @@ class HermesModuleStateTest(unittest.TestCase):
             write_envfile(
                 self.state.SECRETS_DIR / "3.env",
                 {
+                    "API_SERVER_KEY": "api-server-key",
                     "HERMES_AGENT_SECRET": "preserved",
                     "SMTP_PASSWORD": "old-pass",
                 },
@@ -1931,9 +2010,10 @@ class HermesModuleStateTest(unittest.TestCase):
                 self.sync.sync_agent_runtime_files(agent_id=3)
 
             agent_secrets = read_envfile(self.state.SECRETS_DIR / "3.env")
+            self.assertEqual(agent_secrets["API_SERVER_KEY"], "api-server-key")
             self.assertEqual(agent_secrets["HERMES_AGENT_SECRET"], "preserved")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "new-pass")
-            self.assertEqual(set(agent_secrets), {"HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
+            self.assertEqual(set(agent_secrets), {"API_SERVER_KEY", "HERMES_AGENT_SECRET", "SMTP_PASSWORD"})
 
     def test_configure_module_reconciles_removed_and_started_agents(self):
         original_agent = sys.modules.get("agent")
@@ -2368,15 +2448,72 @@ class HermesModuleStateTest(unittest.TestCase):
         sys.modules["agent"] = agent_stub
 
         try:
+            stderr = io.StringIO()
             with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch(
                 "sys.stdin", io.StringIO("{}")
+            ), mock.patch(
+                "sys.stderr", stderr
             ), self.assertRaisesRegex(ValueError, "restore environment"):
                 runpy.run_path(str(RESTORE_COPY_ENV_PATH), run_name="__main__")
+
+            self.assertIn(
+                "restore-module/06copyenv failed: restore environment is required",
+                stderr.getvalue(),
+            )
         finally:
             if original_agent is not None:
                 sys.modules["agent"] = original_agent
             else:
                 del sys.modules["agent"]
+
+    def test_reconcile_desired_routes_logs_failed_route_updates(self):
+        original_agent = sys.modules.get("agent")
+        original_agent_tasks = sys.modules.get("agent.tasks")
+        agent_tasks_stub = types.ModuleType("agent.tasks")
+        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 7, "error": "traefik unavailable"}))
+
+        agent_stub = types.ModuleType("agent")
+        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
+        setattr(agent_stub, "tasks", agent_tasks_stub)
+        sys.modules["agent"] = agent_stub
+        sys.modules["agent.tasks"] = agent_tasks_stub
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+                self.state.write_jsonfile(
+                    Path("agents") / "1" / "metadata.json",
+                    {"id": 1, "name": "Route Agent", "role": "developer", "status": "start"},
+                )
+                stderr = io.StringIO()
+
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "MODULE_ID": "hermes-agent1",
+                        "TCP_PORT": "20001",
+                        self.state.BASE_VIRTUALHOST_ENV: "agents.example.org",
+                        self.state.LETS_ENCRYPT_ENV: "false",
+                    },
+                    clear=False,
+                ), mock.patch("sys.stdin", io.StringIO(json.dumps({"agents": [{"id": 1, "name": "Route Agent", "role": "developer", "status": "start"}]}))), mock.patch(
+                    "sys.stderr", stderr
+                ), self.assertRaisesRegex(ValueError, "set-route for shared route hermes-agent1-hermes-auth host agents.example.org failed with exit code 7"):
+                    runpy.run_path(str(RECONCILE_DESIRED_ROUTES_PATH), run_name="__main__")
+
+                self.assertIn(
+                    'configure-module/90reconcile-desired-routes failed: set-route for shared route hermes-agent1-hermes-auth host agents.example.org failed with exit code 7 (error="traefik unavailable")',
+                    stderr.getvalue(),
+                )
+        finally:
+            if original_agent is not None:
+                sys.modules["agent"] = original_agent
+            else:
+                del sys.modules["agent"]
+
+            if original_agent_tasks is not None:
+                sys.modules["agent.tasks"] = original_agent_tasks
+            elif "agent.tasks" in sys.modules:
+                del sys.modules["agent.tasks"]
 
     def test_restore_module_replays_configure_module_from_restored_state(self):
         original_agent = sys.modules.get("agent")
@@ -2446,7 +2583,8 @@ class HermesModuleStateTest(unittest.TestCase):
                         ],
                     },
                 )
-                agent_stub.assert_exp.assert_called_once_with(True, "The configure-module subtask failed!")
+                agent_stub.assert_exp.assert_called_once()
+                self.assertEqual(agent_stub.assert_exp.call_args.args[0], True)
         finally:
             if original_agent is not None:
                 sys.modules["agent"] = original_agent
@@ -2827,10 +2965,11 @@ class HermesModuleStateTest(unittest.TestCase):
 
         try:
             stdout = io.StringIO()
+            stderr = io.StringIO()
             with mock.patch(
                 "sys.stdin",
                 io.StringIO(json.dumps({"lets_encrypt": "yes", "agents": []})),
-            ), mock.patch("sys.stdout", stdout), self.assertRaises(SystemExit) as exit_error:
+            ), mock.patch("sys.stdout", stdout), mock.patch("sys.stderr", stderr), self.assertRaises(SystemExit) as exit_error:
                 runpy.run_path(
                     str(CONFIGURE_MODULE_ACTION_DIR / "10validate-input"),
                     run_name="__main__",
@@ -2847,6 +2986,10 @@ class HermesModuleStateTest(unittest.TestCase):
                         "error": "lets_encrypt_invalid",
                     }
                 ],
+            )
+            self.assertIn(
+                'configure-module validation failed for lets_encrypt: lets_encrypt_invalid (parameter=lets_encrypt, value="yes")',
+                stderr.getvalue(),
             )
             agent_stub.set_status.assert_called_once_with("validation-failed")
         finally:

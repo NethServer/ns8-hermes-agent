@@ -9,6 +9,7 @@ import agent
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
+from action_logging import log_action_failure
 from hermes_agent_state import AGENTS_DIR, SECRETS_DIR, SHARED_SECRETS_ENVFILE, ensure_private_directory
 
 
@@ -26,12 +27,21 @@ def ensure_private_file(path):
     os.chmod(file_path, 0o600)
 
 
-json.load(sys.stdin)
+def main():
+    json.load(sys.stdin)
 
-timezone = (os.getenv("TIMEZONE") or "UTC").strip() or "UTC"
+    timezone = (os.getenv("TIMEZONE") or "UTC").strip() or "UTC"
 
-agent.set_env("TIMEZONE", timezone)
+    agent.set_env("TIMEZONE", timezone)
 
-ensure_private_directory(AGENTS_DIR)
-ensure_private_directory(SECRETS_DIR)
-ensure_private_file(SHARED_SECRETS_ENVFILE)
+    ensure_private_directory(AGENTS_DIR)
+    ensure_private_directory(SECRETS_DIR)
+    ensure_private_file(SHARED_SECRETS_ENVFILE)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("create-module/10initialize-state", error)
+        raise

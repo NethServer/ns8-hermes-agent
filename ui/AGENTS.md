@@ -1,8 +1,10 @@
 # ui Guidelines
 
 - This subtree is the embedded NS8 admin UI. Preserve the current stack unless the task is a frontend migration: Vue 2, Vue CLI, Vue Router, Vuex, Carbon, and `@nethserver/ns8-ui-lib`.
+- The UI is for administrators inside cluster-admin. It should call NS8 actions/API through the existing module UI patterns and must not introduce a bespoke backend for configuration or runtime state.
+- Keep standard NS8 module pages where useful: Status, Settings, and About. Settings owns administrator-supplied configuration; live runtime drift belongs in views that explicitly call `get-agent-runtime`.
 - The settings page is now agent-focused plus shared dashboard publishing. Keep it focused on the shared `base_virtualhost` field, the shared `user_domain` selector, the shared `lets_encrypt` toggle, listing agents, creating and editing agents, selecting per-agent `allowed_user` values, deleting agents, and toggling start or stop state.
 - The backend payload for `configure-module` is `{ "base_virtualhost": "", "user_domain": "", "lets_encrypt": false, "agents": [...] }`. Each agent entry now also persists `allowed_user` alongside `id`, `name`, `role`, and `status`.
 - `get-configuration` returns `{ "base_virtualhost": "", "user_domain": "", "lets_encrypt": false, "agents": [...] }`, where `status` is the desired persisted state and each agent may include `allowed_user`. `Settings.vue` should round-trip `base_virtualhost`, `user_domain`, `lets_encrypt`, `allowed_user`, and the desired `status` back to `configure-module`. Live service state is available separately from `get-agent-runtime`, which returns `{ "agents": [{ "id": 1, "runtime_status": "start" }] }`, for views that explicitly need runtime drift or failed-start visibility.
 - The supporting selectors are powered by `list-user-domains` and `list-domain-users`. Preserve those action contracts when changing the shared auth publishing flow.
-- When user-facing text changes, update `public/metadata.json` and the translation files together.
+- When user-facing text changes, update `public/metadata.json` and the translation files together. Keep validation messages aligned with the action schemas and server-side validation behavior rather than duplicating separate rules in the browser.

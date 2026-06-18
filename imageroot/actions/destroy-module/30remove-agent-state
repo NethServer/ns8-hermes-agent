@@ -7,10 +7,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
+from action_logging import log_action_failure
 from hermes_agent_state import list_known_agent_ids
 
 
-json.load(sys.stdin)
+def main():
+    json.load(sys.stdin)
 
-for agent_id in list_known_agent_ids():
-    subprocess.run(["runagent", "remove-agent-state", "--agent-id", str(agent_id)], check=True)
+    for agent_id in list_known_agent_ids():
+        subprocess.run(["runagent", "remove-agent-state", "--agent-id", str(agent_id)], check=True)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("destroy-module/30remove-agent-state", error)
+        raise

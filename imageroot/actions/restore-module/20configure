@@ -10,21 +10,37 @@ import agent.tasks
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
+from action_logging import describe_task_failure, log_action_failure
 from hermes_agent_state import BASE_VIRTUALHOST_ENV, LETS_ENCRYPT_ENV, USER_DOMAIN_ENV, env_to_bool, read_agents_from_state
 
 
-json.load(sys.stdin)
+def main():
+    json.load(sys.stdin)
 
-configure_request = {
-    "base_virtualhost": (os.getenv(BASE_VIRTUALHOST_ENV) or "").strip().lower(),
-    "user_domain": (os.getenv(USER_DOMAIN_ENV) or "").strip().lower(),
-    "lets_encrypt": env_to_bool(os.getenv(LETS_ENCRYPT_ENV)),
-    "agents": read_agents_from_state(),
-}
+    configure_request = {
+        "base_virtualhost": (os.getenv(BASE_VIRTUALHOST_ENV) or "").strip().lower(),
+        "user_domain": (os.getenv(USER_DOMAIN_ENV) or "").strip().lower(),
+        "lets_encrypt": env_to_bool(os.getenv(LETS_ENCRYPT_ENV)),
+        "agents": read_agents_from_state(),
+    }
 
-configure_retval = agent.tasks.run(
-    agent_id=os.environ["AGENT_ID"],
-    action="configure-module",
-    data=configure_request,
-)
-agent.assert_exp(configure_retval["exit_code"] == 0, "The configure-module subtask failed!")
+    configure_retval = agent.tasks.run(
+        agent_id=os.environ["AGENT_ID"],
+        action="configure-module",
+        data=configure_request,
+    )
+    error_message = "The configure-module subtask failed!"
+    if configure_retval["exit_code"] != 0:
+        error_message = describe_task_failure("restore-module configure-module subtask", configure_retval)
+    agent.assert_exp(
+        configure_retval["exit_code"] == 0,
+        error_message,
+    )
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("restore-module/20configure", error)
+        raise

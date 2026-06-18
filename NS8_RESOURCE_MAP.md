@@ -78,6 +78,13 @@ This document maps the main official and quasi-official NethServer 8 resources a
 3. **Use repository READMEs and code** for exact action names, CLI examples, environment variables, and implementation details. ([GitHub][24])
 4. **Use the official issue tracker and community forum** for unresolved edge cases, bugs, regressions, or undocumented behavior. ([GitHub][6])
 
+For agentic development inside this repository, apply local checked-in docs first, then official NS8 manuals, then maintained module and `ns8-kickstart` patterns. The current kickstart guideline files used for this repository refresh are:
+
+* [ns8-kickstart agentic AGENTS.md](https://github.com/Stell0/ns8-kickstart/blob/agentic_dev/AGENTS.md)
+* [ns8-kickstart agentic STRUCTURE.md](https://github.com/Stell0/ns8-kickstart/blob/agentic_dev/STRUCTURE.md)
+
+Treat those guideline files as patterns to evaluate against the local module contract, not as a replacement for checked-in behavior.
+
 ## Query-to-resource routing
 
 ### “What is NethServer 8 features?”

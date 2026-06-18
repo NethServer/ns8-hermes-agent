@@ -10,6 +10,7 @@ import agent.tasks
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 
+from action_logging import describe_task_failure, log_action_failure
 from hermes_agent_state import (
     LETS_ENCRYPT_ENV,
     env_to_bool,
@@ -17,22 +18,32 @@ from hermes_agent_state import (
 )
 
 
-json.load(sys.stdin)
+def main():
+    json.load(sys.stdin)
 
-traefik_agent_id = agent.resolve_agent_id("traefik@node")
-if traefik_agent_id is None:
-    sys.exit(0)
+    traefik_agent_id = agent.resolve_agent_id("traefik@node")
+    if traefik_agent_id is None:
+        sys.exit(0)
 
-cleanup_lets_encrypt = env_to_bool(os.getenv(LETS_ENCRYPT_ENV))
+    cleanup_lets_encrypt = env_to_bool(os.getenv(LETS_ENCRYPT_ENV))
 
-# Delete the shared route first, then remove any retained legacy per-agent
-# route instances from older module revisions.
-route_request = {"instance": shared_route_instance_name(module_id=os.environ.get("MODULE_ID"))}
-if cleanup_lets_encrypt:
-    route_request["lets_encrypt_cleanup"] = True
-response = agent.tasks.run(
-    agent_id=traefik_agent_id,
-    action="delete-route",
-    data=route_request,
-)
-agent.assert_exp(response["exit_code"] == 0)
+    # Delete the shared route first, then remove any retained legacy per-agent
+    # route instances from older module revisions.
+    route_request = {"instance": shared_route_instance_name(module_id=os.environ.get("MODULE_ID"))}
+    if cleanup_lets_encrypt:
+        route_request["lets_encrypt_cleanup"] = True
+    response = agent.tasks.run(
+        agent_id=traefik_agent_id,
+        action="delete-route",
+        data=route_request,
+    )
+    if response["exit_code"] != 0:
+        raise ValueError(describe_task_failure(f"delete-route for shared route {route_request['instance']}", response))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("destroy-module/10remove-routes", error)
+        raise

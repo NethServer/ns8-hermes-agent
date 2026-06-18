@@ -29,6 +29,7 @@ From dashboard, you can setup a Telegram and everything else, but Dashboard is s
 * the Dashboard Web UI is bundled into the Hermes wrapper image at build time. After the agent service starts, availability depends on the Hermes runtime booting, not on a fresh dashboard rebuild.
 * after changing the configuration from dashboard, the agent service needs to be restarted to apply the new configuration. At the moment it can be done with the /restart command, but the first time you configure a messaging platform you need to restart the service from terminal with `systemctl --user restart hermes@<id>.service` or saving changes from NS8 ui
 * At the moment, saving changes from NS8 UI restart all the agents, but in the future we will implement a smarter logic to restart only the agent that needs it.
+* If the selected NS8 user domain's connection details change outside this module, save the module configuration again from the NS8 UI to regenerate auth runtime files and restart the shared auth service.
 
 
 ## Command line
@@ -78,6 +79,8 @@ The current implementation is intentionally small:
 - The module supports at most 30 agents and reserves one TCP port for the shared auth listener.
 - The module is now an NS8 account consumer and can bind one shared `user_domain` plus one per-agent `allowed_user` for published dashboard authentication.
 
+The module follows the NS8 rootless model: actions converge desired state, user systemd units own long-running containers, and Traefik owns public HTTP(S) routing. It intentionally uses `secrets/shared.env` plus per-agent `secrets/<id>.env` files instead of one generic secret env file, because each Hermes runtime needs isolated private values.
+
 ## Current behavior
 
 - `create-module` first checks that the installed Podman release supports volume `subpath` mounts, then seeds minimal module state in `environment`, `secrets/shared.env`, and `agents/`, records `TIMEZONE`, and discovers smarthost settings.
@@ -99,6 +102,8 @@ volumes/hermes-agents-home
 
 NS8 core uses this file to include the agent metadata, the secrets directory, and the shared home volume in restic snapshots. Derived auth proxy files are intentionally excluded because they can be regenerated from the restored shared environment, agent metadata, and secrets.
 
+The module does not own Redis service-discovery keys, so it does not need Redis dump/restore helper actions. It also does not publish direct public TCP/UDP firewall services; dashboard access remains behind Traefik and the loopback shared auth listener.
+
 After a restore, `restore-module/06copyenv` restores only Hermes-managed shared keys from `request['environment']` (`TIMEZONE`, `BASE_VIRTUALHOST`, `USER_DOMAIN`, `LETS_ENCRYPT`). Then `restore-module/20configure` reads the restored `agents/` tree and reruns `configure-module` so the module rebinds the user domain, regenerates derived runtime files (`agents/<id>/agent.env`, `authproxy.*`), reconciles routes, and recreates the expected services without a manual reconfigure.
 
 ## Generated state
@@ -112,11 +117,13 @@ Module-wide files:
 - `authproxy_agents.json`
 - `dashboard-sockets/`
 
+`environment` contains non-secret module state. Secret values belong in `secrets/shared.env`, per-agent `secrets/<id>.env`, or generated auth proxy secret files, and should not appear in task output or logs.
+
 Per-agent files:
 
 - `agents/<id>/metadata.json`
 - `agents/<id>/agent.env`
-- `secrets/<id>.env`
+- `secrets/<id>.env`, including a generated per-agent `API_SERVER_KEY` plus other private runtime values as needed
 
 Shared Podman volume:
 
@@ -143,7 +150,7 @@ Build the module image, auth proxy image, Hermes wrapper image, and socket relay
 bash build-images.sh
 ```
 
-The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.5.29`. The wrapper no longer patches or rebuilds dashboard web sources at startup; it bootstraps the Hermes home and points `HERMES_WEB_DIST` at the bundled upstream `web_dist` when present.
+The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.6.5`. The wrapper no longer patches or rebuilds dashboard web sources at startup; it bootstraps the Hermes home and points `HERMES_WEB_DIST` at the bundled upstream `web_dist` when present.
 
 The script uses:
 
@@ -263,7 +270,7 @@ Shared publishing also runs:
 Restart supervision is owned by the systemd user units; `hermes@<id>.service` uses `Restart=always` so in-agent `/restart` messages can cycle the gateway, while sidecar/auth services use failure-oriented restart policies. Podman pod and container launches do not set container-level restart policies.
 The shipped services mount the shared `hermes-agents-home` volume twice: the whole volume at `/opt/agents` for maintenance flows and the per-agent subdir at `/opt/data` for the live Hermes home. Inside the running Hermes container, `HERMES_HOME` defaults to `/opt/data`.
 Managed `SOUL.md` and home `.env` seeding runs before service start in `configure-module/75seed-agent-home`; later agent edits preserve existing files inside the volume.
-The Hermes container reads `agents/<id>/agent.env` and `secrets/<id>.env`, mounts the shared home volume, and runs `hermes gateway run` inside the pod. The per-agent socket sidecar relays that listener onto `%S/state/dashboard-sockets/agent-<id>.sock`. The shared auth proxy container reads `authproxy.env`, `authproxy_secrets.env`, and `authproxy_agents.json`, mounts `%S/state/dashboard-sockets:/sockets:z`, authenticates the shared route against LDAP, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, logs auth events to stdout, and proxies requests to the assigned per-agent `upstream_socket`.
+The Hermes container reads `agents/<id>/agent.env` and `secrets/<id>.env`, including the generated per-agent `API_SERVER_KEY`, mounts the shared home volume, and runs `hermes gateway run` inside the pod. The per-agent socket sidecar relays that listener onto `%S/state/dashboard-sockets/agent-<id>.sock`. The shared auth proxy container reads `authproxy.env`, `authproxy_secrets.env`, and `authproxy_agents.json`, mounts `%S/state/dashboard-sockets:/sockets:z`, authenticates the shared route against LDAP, preserves the dashboard upstream `Authorization` header, injects a trusted `X-Hermes-Authenticated-User` header derived from the authenticated session username while ignoring any client-supplied value for that header, logs auth events to stdout, and proxies requests to the assigned per-agent `upstream_socket`.
 If `base_virtualhost` is set, Traefik forwards `https://<base_virtualhost>/` directly to the shared auth proxy listener. No per-agent path route, `strip_prefix`, or `X-Forwarded-Prefix` header is required.
 
 ## UI development
@@ -304,6 +311,8 @@ The checked-in tests cover the pruned contract:
 - stopping an agent disables the runtime without deleting its generated files or shared-volume subdir
 - removing an agent cleans the runtime files and its shared-volume subdir
 - removing the module cleans the instance state
+
+For behavior changes, keep the lifecycle tests aligned with install, configure, route reachability, reconfigure, service reconciliation, uninstall, validation failures, and secret non-disclosure where relevant.
 
 ## Uninstall
 
