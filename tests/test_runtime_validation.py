@@ -770,6 +770,7 @@ class HermesAuthProxyTest(unittest.TestCase):
 
         self.assertNotIn("origin", {name.lower() for name in headers})
         self.assertNotIn("sec-websocket-key", {name.lower() for name in headers})
+        self.assertNotIn("authorization", {name.lower() for name in headers})
         self.assertNotIn(authproxy.SESSION_COOKIE, headers.get("Cookie", ""))
         self.assertIn("other=keep-me", headers["Cookie"])
         self.assertEqual(headers[authproxy.AUTHENTICATED_USER_HEADER], "alice")
@@ -794,6 +795,146 @@ class HermesAuthProxyTest(unittest.TestCase):
             asyncio.run(authproxy.proxy_websocket("api/pty", websocket))
 
         self.assertEqual(websocket.closed[0]["code"], 4401)
+
+    def test_websocket_proxy_tears_down_when_client_disconnects_while_upstream_idle(self):
+        authproxy = self.load_authproxy()
+        config = self.socket_runtime_config(authproxy)
+
+        class IdleUpstreamWebSocket:
+            def __init__(self):
+                self.close_code = 1000
+                self.closed = False
+                self.never_yield = asyncio.Event()
+
+            async def send_str(self, value):
+                raise AssertionError("client disconnect should not send upstream data")
+
+            async def send_bytes(self, value):
+                raise AssertionError("client disconnect should not send upstream data")
+
+            async def close(self):
+                self.closed = True
+
+            def __aiter__(self):
+                async def iterator():
+                    await self.never_yield.wait()
+                    if False:
+                        yield None
+
+                return iterator()
+
+        class FakeWsClient:
+            def __init__(self):
+                self.upstream_ws = IdleUpstreamWebSocket()
+
+            async def ws_connect(self, *args, **kwargs):
+                return self.upstream_ws
+
+        fake_ws_client = FakeWsClient()
+        websocket = self.make_websocket(
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                )
+            }
+        )
+        websocket._incoming = [{"type": "websocket.disconnect"}]
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy,
+            "upstream_websocket_client_for_agent",
+            return_value=fake_ws_client,
+        ):
+            asyncio.run(asyncio.wait_for(authproxy.proxy_websocket("api/pty", websocket), timeout=0.1))
+
+        self.assertTrue(websocket.accepted)
+        self.assertTrue(fake_ws_client.upstream_ws.closed)
+
+    def test_websocket_proxy_tears_down_when_upstream_closes_while_client_idle(self):
+        authproxy = self.load_authproxy()
+        config = self.socket_runtime_config(authproxy)
+
+        class ClosingUpstreamWebSocket:
+            def __init__(self):
+                self.close_code = 1001
+                self.closed = False
+
+            async def send_str(self, value):
+                raise AssertionError("idle client should not send upstream data")
+
+            async def send_bytes(self, value):
+                raise AssertionError("idle client should not send upstream data")
+
+            async def close(self):
+                self.closed = True
+
+            def __aiter__(self):
+                async def iterator():
+                    if False:
+                        yield None
+
+                return iterator()
+
+        class FakeWsClient:
+            def __init__(self):
+                self.upstream_ws = ClosingUpstreamWebSocket()
+
+            async def ws_connect(self, *args, **kwargs):
+                return self.upstream_ws
+
+        fake_ws_client = FakeWsClient()
+        websocket = self.make_websocket(
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                )
+            }
+        )
+        client_receive_blocked = asyncio.Event()
+
+        async def receive_forever():
+            await client_receive_blocked.wait()
+            return {"type": "websocket.disconnect"}
+
+        websocket.receive = receive_forever
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy,
+            "upstream_websocket_client_for_agent",
+            return_value=fake_ws_client,
+        ):
+            asyncio.run(asyncio.wait_for(authproxy.proxy_websocket("api/events", websocket), timeout=0.1))
+
+        self.assertTrue(websocket.accepted)
+        self.assertEqual(websocket.closed[0]["code"], 1001)
+        self.assertTrue(fake_ws_client.upstream_ws.closed)
+
+    def test_websocket_proxy_rejects_reserved_paths(self):
+        authproxy = self.load_authproxy()
+        config = self.socket_runtime_config(authproxy)
+        session_cookie = json.dumps(
+            {
+                "allowed_user": "alice",
+                "user_domain": config.user_domain,
+                "agent_id": 1,
+            }
+        )
+
+        for path in [authproxy.LOGIN_PATH, authproxy.LOGOUT_PATH, "/health", "/hermes-1"]:
+            websocket = self.make_websocket(path=path, cookies={authproxy.SESSION_COOKIE: session_cookie})
+
+            with mock.patch.object(authproxy, "load_config", return_value=config):
+                asyncio.run(authproxy.proxy_websocket(path.lstrip("/"), websocket))
+
+            self.assertEqual(websocket.closed[0]["code"], 4404)
 
     def test_websocket_proxy_uses_unix_socket_upstream_when_configured(self):
         authproxy = self.load_authproxy()

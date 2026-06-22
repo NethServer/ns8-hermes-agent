@@ -635,7 +635,7 @@ def upstream_websocket_headers(request, authenticated_username=""):
     forwarded_headers = {}
     for name, value in request.headers.items():
         lower_name = name.lower()
-        if lower_name in HOP_BY_HOP_HEADERS or lower_name in WEBSOCKET_HANDSHAKE_HEADERS or lower_name in {"host", AUTHENTICATED_USER_HEADER.lower()}:
+        if lower_name in HOP_BY_HOP_HEADERS or lower_name in WEBSOCKET_HANDSHAKE_HEADERS or lower_name in {"host", "authorization", AUTHENTICATED_USER_HEADER.lower()}:
             continue
         if lower_name == "cookie":
             continue
@@ -845,7 +845,7 @@ async def proxy_websocket_to_agent(agent_record, websocket, authenticated_userna
 
     client_task = asyncio.create_task(client_to_upstream())
     upstream_task = asyncio.create_task(upstream_to_client())
-    done, pending = await asyncio.wait({client_task, upstream_task}, return_when=asyncio.FIRST_EXCEPTION)
+    done, pending = await asyncio.wait({client_task, upstream_task}, return_when=asyncio.FIRST_COMPLETED)
 
     failure = None
     for task in done:
