@@ -278,6 +278,7 @@ def run_seed_script(script, data_dir, agent_id, agent_name, agent_role):
 @contextmanager
 def mocked_authproxy_dependencies():
     module_names = [
+        "aiohttp",
         "fastapi",
         "fastapi.responses",
         "httpx",
@@ -291,6 +292,7 @@ def mocked_authproxy_dependencies():
 
     fastapi_module = types.ModuleType("fastapi")
     fastapi_responses_module = types.ModuleType("fastapi.responses")
+    aiohttp_module = types.ModuleType("aiohttp")
     httpx_module = types.ModuleType("httpx")
     itsdangerous_module = types.ModuleType("itsdangerous")
     ldap3_module = types.ModuleType("ldap3")
@@ -316,6 +318,12 @@ def mocked_authproxy_dependencies():
             return decorator
 
         def api_route(self, *_args, **_kwargs):
+            def decorator(function):
+                return function
+
+            return decorator
+
+        def websocket(self, *_args, **_kwargs):
             def decorator(function):
                 return function
 
@@ -383,16 +391,49 @@ def mocked_authproxy_dependencies():
             self.args = args
             self.kwargs = kwargs
 
+    class FakeAiohttpClientError(Exception):
+        pass
+
+    class FakeUnixConnector:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.path = kwargs.get("path")
+
+    class FakeClientSession:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+        async def ws_connect(self, *args, **kwargs):
+            raise NotImplementedError
+
+        async def close(self):
+            return None
+
+    class FakeWebSocketDisconnect(Exception):
+        pass
+
     def escape_filter_chars(value):
         return value.replace("\\", r"\5c").replace("*", r"\2a").replace("(", r"\28").replace(")", r"\29")
 
     setattr(fastapi_module, "FastAPI", FakeFastAPI)
     setattr(fastapi_module, "Request", object)
+    setattr(fastapi_module, "WebSocket", object)
+    setattr(fastapi_module, "WebSocketDisconnect", FakeWebSocketDisconnect)
     setattr(fastapi_responses_module, "HTMLResponse", FakeResponse)
     setattr(fastapi_responses_module, "JSONResponse", FakeResponse)
     setattr(fastapi_responses_module, "PlainTextResponse", FakeResponse)
     setattr(fastapi_responses_module, "RedirectResponse", FakeResponse)
     setattr(fastapi_responses_module, "Response", FakeResponse)
+    setattr(aiohttp_module, "ClientError", FakeAiohttpClientError)
+    setattr(aiohttp_module, "ClientSession", FakeClientSession)
+    setattr(aiohttp_module, "UnixConnector", FakeUnixConnector)
+    setattr(
+        aiohttp_module,
+        "WSMsgType",
+        types.SimpleNamespace(TEXT="text", BINARY="binary", CLOSE="close", CLOSED="closed", CLOSING="closing", ERROR="error"),
+    )
     setattr(httpx_module, "AsyncClient", FakeAsyncClient)
     setattr(httpx_module, "AsyncHTTPTransport", FakeAsyncHTTPTransport)
     setattr(httpx_module, "RequestError", FakeRequestError)
@@ -406,6 +447,7 @@ def mocked_authproxy_dependencies():
     setattr(ldap3_utils_conv_module, "escape_filter_chars", escape_filter_chars)
     setattr(uvicorn_module, "run", lambda *args, **kwargs: None)
 
+    sys.modules["aiohttp"] = aiohttp_module
     sys.modules["fastapi"] = fastapi_module
     sys.modules["fastapi.responses"] = fastapi_responses_module
     sys.modules["httpx"] = httpx_module
@@ -493,6 +535,40 @@ class HermesAuthProxyTest(unittest.TestCase):
                 return self._body
 
         return FakeRequest()
+
+    def make_websocket(self, headers=None, cookies=None, path="/api/pty", query="token=test&channel=abc"):
+        class FakeWebSocket:
+            def __init__(self):
+                self.headers = headers or {}
+                self.cookies = cookies or {}
+                self.url = types.SimpleNamespace(path=path, query=query)
+                self.app = types.SimpleNamespace(state=types.SimpleNamespace())
+                self.client = types.SimpleNamespace(host="198.51.100.42")
+                self.accepted = False
+                self.closed = []
+                self.sent_text = []
+                self.sent_bytes = []
+                self._incoming = []
+
+            async def accept(self, subprotocol=None):
+                self.accepted = True
+                self.accepted_subprotocol = subprotocol
+
+            async def close(self, code=1000, reason=None):
+                self.closed.append({"code": code, "reason": reason})
+
+            async def receive(self):
+                if self._incoming:
+                    return self._incoming.pop(0)
+                return {"type": "websocket.disconnect"}
+
+            async def send_text(self, value):
+                self.sent_text.append(value)
+
+            async def send_bytes(self, value):
+                self.sent_bytes.append(value)
+
+        return FakeWebSocket()
 
     def test_authproxy_uses_fastapi_lifespan(self):
         authproxy = self.load_authproxy()
@@ -670,6 +746,126 @@ class HermesAuthProxyTest(unittest.TestCase):
         self.assertIn("event=proxy_forward", logged_messages[2])
         self.assertIn("agent_id=1", logged_messages[2])
         self.assertIn("detail=upstream_url=http://10.0.2.2:20002/api/status?verbose=1", logged_messages[2])
+
+    def test_websocket_upstream_headers_strip_browser_handshake_and_session_cookie(self):
+        authproxy = self.load_authproxy()
+        websocket = self.make_websocket(
+            headers={
+                "host": "hermes.example.org",
+                "origin": "https://hermes.example.org",
+                "connection": "Upgrade",
+                "upgrade": "websocket",
+                "sec-websocket-key": "abc",
+                "sec-websocket-version": "13",
+                "authorization": "Bearer dashboard-token",
+                "x-forwarded-proto": "https",
+            },
+            cookies={
+                authproxy.SESSION_COOKIE: "session-cookie",
+                "other": "keep-me",
+            },
+        )
+
+        headers = authproxy.upstream_websocket_headers(websocket, authenticated_username="alice")
+
+        self.assertNotIn("origin", {name.lower() for name in headers})
+        self.assertNotIn("sec-websocket-key", {name.lower() for name in headers})
+        self.assertNotIn(authproxy.SESSION_COOKIE, headers.get("Cookie", ""))
+        self.assertIn("other=keep-me", headers["Cookie"])
+        self.assertEqual(headers[authproxy.AUTHENTICATED_USER_HEADER], "alice")
+        self.assertEqual(headers["Host"], "127.0.0.1:9120")
+
+    def test_websocket_upstream_url_converts_http_origin_to_ws(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+        websocket = self.make_websocket(path="/api/events", query="channel=abc")
+
+        self.assertEqual(
+            authproxy.websocket_upstream_url(config.agents_by_id[1], websocket),
+            "ws://10.0.2.2:20002/api/events?channel=abc",
+        )
+
+    def test_websocket_proxy_rejects_missing_session(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+        websocket = self.make_websocket()
+
+        with mock.patch.object(authproxy, "load_config", return_value=config):
+            asyncio.run(authproxy.proxy_websocket("api/pty", websocket))
+
+        self.assertEqual(websocket.closed[0]["code"], 4401)
+
+    def test_websocket_proxy_uses_unix_socket_upstream_when_configured(self):
+        authproxy = self.load_authproxy()
+        config = self.socket_runtime_config(authproxy)
+
+        class FakeUpstreamWebSocket:
+            def __init__(self):
+                self.close_code = 1000
+                self.protocol = "chat.v2"
+                self.sent_text = []
+                self.sent_bytes = []
+                self._messages = [types.SimpleNamespace(type=authproxy.aiohttp.WSMsgType.TEXT, data="upstream-ready")]
+
+            async def send_str(self, value):
+                self.sent_text.append(value)
+
+            async def send_bytes(self, value):
+                self.sent_bytes.append(value)
+
+            async def close(self):
+                self.close_code = self.close_code or 1000
+
+            def __aiter__(self):
+                async def iterator():
+                    for message in self._messages:
+                        yield message
+
+                return iterator()
+
+        class FakeWsClient:
+            def __init__(self):
+                self.calls = []
+                self.upstream_ws = FakeUpstreamWebSocket()
+
+            async def ws_connect(self, *args, **kwargs):
+                self.calls.append({"args": args, "kwargs": kwargs})
+                return self.upstream_ws
+
+        fake_ws_client = FakeWsClient()
+        websocket = self.make_websocket(
+            headers={"x-forwarded-proto": "https", "host": "agents.example.org", "sec-websocket-protocol": "chat.v1, chat.v2"},
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                ),
+                "other": "keep-me",
+            },
+        )
+        websocket._incoming = [{"type": "websocket.receive", "text": "client-hello"}, {"type": "websocket.disconnect"}]
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy,
+            "upstream_websocket_client_for_agent",
+            return_value=fake_ws_client,
+        ):
+            asyncio.run(authproxy.proxy_websocket("api/pty", websocket))
+
+        self.assertTrue(websocket.accepted)
+        self.assertEqual(websocket.accepted_subprotocol, "chat.v2")
+        self.assertEqual(websocket.sent_text, ["upstream-ready"])
+        self.assertEqual(fake_ws_client.upstream_ws.sent_text, ["client-hello"])
+        self.assertEqual(fake_ws_client.calls[0]["args"][0], "ws://agent-1/api/pty?token=test&channel=abc")
+        self.assertEqual(fake_ws_client.calls[0]["kwargs"]["headers"]["Cookie"], "other=keep-me")
+        self.assertEqual(fake_ws_client.calls[0]["kwargs"]["protocols"], ["chat.v1", "chat.v2"])
+        self.assertEqual(
+            fake_ws_client.calls[0]["kwargs"]["headers"][authproxy.AUTHENTICATED_USER_HEADER],
+            "alice",
+        )
 
     def test_load_agent_registry_accepts_unix_socket_upstreams(self):
         authproxy = self.load_authproxy()
@@ -1122,6 +1318,7 @@ class HermesModuleStateTest(unittest.TestCase):
 
         self.assertIn("FROM docker.io/python:3.12-slim", containerfile)
         self.assertIn('org.opencontainers.image.title="hermes-agent-auth"', containerfile)
+        self.assertIn("aiohttp==3.12.13", containerfile)
         self.assertIn("fastapi==0.115.12", containerfile)
         self.assertIn("ldap3==2.9.1", containerfile)
         self.assertIn("COPY authproxy.py /app/authproxy.py", containerfile)

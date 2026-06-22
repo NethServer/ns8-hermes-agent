@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import asyncio
 import json
 import logging
 import os
@@ -8,11 +9,12 @@ import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from html import escape
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
+import aiohttp
 import httpx
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
 from ldap3 import ALL, Connection, Server
@@ -34,6 +36,13 @@ HOP_BY_HOP_HEADERS = {
     "trailer",
     "transfer-encoding",
     "upgrade",
+}
+WEBSOCKET_HANDSHAKE_HEADERS = {
+    "sec-websocket-key",
+    "sec-websocket-version",
+    "sec-websocket-extensions",
+    "sec-websocket-protocol",
+    "origin",
 }
 LOGGER = logging.getLogger("hermes.authproxy")
 
@@ -222,11 +231,17 @@ def ldap_server(config):
 async def lifespan(app: FastAPI):
     app.state.client = httpx.AsyncClient(timeout=60.0, follow_redirects=False)
     app.state.uds_clients = {}
+    app.state.ws_clients = {}
+    app.state.ws_uds_clients = {}
     try:
         yield
     finally:
         for client in app.state.uds_clients.values():
             await client.aclose()
+        for client in app.state.ws_clients.values():
+            await client.close()
+        for client in app.state.ws_uds_clients.values():
+            await client.close()
         await app.state.client.aclose()
 
 
@@ -616,6 +631,39 @@ def upstream_headers(request, authenticated_username=""):
     return forwarded_headers
 
 
+def upstream_websocket_headers(request, authenticated_username=""):
+    forwarded_headers = {}
+    for name, value in request.headers.items():
+        lower_name = name.lower()
+        if lower_name in HOP_BY_HOP_HEADERS or lower_name in WEBSOCKET_HANDSHAKE_HEADERS or lower_name in {"host", AUTHENTICATED_USER_HEADER.lower()}:
+            continue
+        if lower_name == "cookie":
+            continue
+        forwarded_headers[name] = value
+
+    filtered_cookies = [
+        f"{name}={value}"
+        for name, value in request.cookies.items()
+        if name != SESSION_COOKIE
+    ]
+    if filtered_cookies:
+        forwarded_headers["Cookie"] = "; ".join(filtered_cookies)
+
+    if authenticated_username:
+        forwarded_headers[AUTHENTICATED_USER_HEADER] = authenticated_username
+
+    forwarded_headers["Host"] = "127.0.0.1:9120"
+    forwarded_headers["X-Forwarded-Proto"] = request.headers.get("x-forwarded-proto", "http")
+    forwarded_headers["X-Forwarded-Host"] = request.headers.get("x-forwarded-host", request.headers.get("host", ""))
+    forwarded_headers["X-Forwarded-For"] = client_host(request)
+    return forwarded_headers
+
+
+def requested_websocket_subprotocols(request):
+    header_value = request.headers.get("sec-websocket-protocol", "")
+    return [candidate.strip() for candidate in header_value.split(",") if candidate.strip()]
+
+
 def response_headers(upstream_response, upstream_base_url):
     headers = {}
     for name, value in upstream_response.headers.items():
@@ -637,6 +685,12 @@ def upstream_request_url(agent_record, request):
     return upstream_url
 
 
+def websocket_upstream_url(agent_record, request):
+    parsed = urlsplit(upstream_request_url(agent_record, request))
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    return urlunsplit((scheme, parsed.netloc, parsed.path, parsed.query, parsed.fragment))
+
+
 def upstream_client_for_agent(request, agent_record):
     if not agent_record.upstream_socket:
         return request.app.state.client
@@ -655,6 +709,30 @@ def upstream_client_for_agent(request, agent_record):
         )
         uds_clients[agent_record.upstream_socket] = client
 
+    return client
+
+
+def upstream_websocket_client_for_agent(request, agent_record):
+    if not agent_record.upstream_socket:
+        ws_clients = getattr(request.app.state, "ws_clients", None)
+        if ws_clients is None:
+            ws_clients = {}
+            request.app.state.ws_clients = ws_clients
+        client = ws_clients.get(agent_record.upstream_origin)
+        if client is None:
+            client = aiohttp.ClientSession()
+            ws_clients[agent_record.upstream_origin] = client
+        return client
+
+    ws_uds_clients = getattr(request.app.state, "ws_uds_clients", None)
+    if ws_uds_clients is None:
+        ws_uds_clients = {}
+        request.app.state.ws_uds_clients = ws_uds_clients
+
+    client = ws_uds_clients.get(agent_record.upstream_socket)
+    if client is None:
+        client = aiohttp.ClientSession(connector=aiohttp.UnixConnector(path=agent_record.upstream_socket))
+        ws_uds_clients[agent_record.upstream_socket] = client
     return client
 
 
@@ -692,6 +770,113 @@ async def proxy_to_agent(agent_record, request, authenticated_username=""):
     )
 
 
+async def proxy_websocket_to_agent(agent_record, websocket, authenticated_username=""):
+    upstream_url = websocket_upstream_url(agent_record, websocket)
+    upstream_client = upstream_websocket_client_for_agent(websocket, agent_record)
+    requested_subprotocols = requested_websocket_subprotocols(websocket)
+
+    log_debug_event(
+        "ws_proxy_forward",
+        websocket,
+        agent_id=str(agent_record.agent_id),
+        detail=f"upstream_url={upstream_url}",
+    )
+
+    try:
+        upstream_ws = await upstream_client.ws_connect(
+            upstream_url,
+            headers=upstream_websocket_headers(websocket, authenticated_username=authenticated_username),
+            protocols=requested_subprotocols,
+            autoping=True,
+            autoclose=True,
+            max_msg_size=0,
+        )
+    except (aiohttp.ClientError, OSError) as exc:
+        log_auth_event(
+            "ws_proxy_failed",
+            websocket,
+            agent_id=str(agent_record.agent_id),
+            detail=f"{exc.__class__.__name__}:{exc}",
+        )
+        await websocket.close(code=1011, reason="Assigned dashboard is temporarily unavailable.")
+        return
+
+    selected_subprotocol = getattr(upstream_ws, "protocol", None) or None
+    if selected_subprotocol:
+        await websocket.accept(subprotocol=selected_subprotocol)
+    else:
+        await websocket.accept()
+
+    async def client_to_upstream():
+        try:
+            while True:
+                message = await websocket.receive()
+                message_type = message.get("type")
+                if message_type == "websocket.disconnect":
+                    await upstream_ws.close()
+                    return
+
+                payload = message.get("bytes")
+                if payload is not None:
+                    await upstream_ws.send_bytes(payload)
+                    continue
+
+                payload = message.get("text")
+                if payload is not None:
+                    await upstream_ws.send_str(payload)
+        except WebSocketDisconnect:
+            await upstream_ws.close()
+
+    async def upstream_to_client():
+        async for message in upstream_ws:
+            if message.type == aiohttp.WSMsgType.TEXT:
+                await websocket.send_text(message.data)
+                continue
+            if message.type == aiohttp.WSMsgType.BINARY:
+                await websocket.send_bytes(message.data)
+                continue
+            if message.type in {aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING}:
+                await websocket.close(code=upstream_ws.close_code or 1000)
+                return
+            if message.type == aiohttp.WSMsgType.ERROR:
+                raise message.data or RuntimeError("upstream websocket error")
+
+        await websocket.close(code=upstream_ws.close_code or 1000)
+
+    client_task = asyncio.create_task(client_to_upstream())
+    upstream_task = asyncio.create_task(upstream_to_client())
+    done, pending = await asyncio.wait({client_task, upstream_task}, return_when=asyncio.FIRST_EXCEPTION)
+
+    failure = None
+    for task in done:
+        try:
+            await task
+        except Exception as exc:
+            failure = exc
+
+    for task in pending:
+        task.cancel()
+    for task in pending:
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    await upstream_ws.close()
+
+    if failure is not None:
+        log_auth_event(
+            "ws_proxy_failed",
+            websocket,
+            agent_id=str(agent_record.agent_id),
+            detail=f"{failure.__class__.__name__}:{failure}",
+        )
+        try:
+            await websocket.close(code=1011, reason="Assigned dashboard is temporarily unavailable.")
+        except Exception:
+            pass
+
+
 app = FastAPI(lifespan=lifespan)
 
 
@@ -709,6 +894,52 @@ async def logout(request: Request):
     )
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response
+
+
+@app.websocket("/{path:path}")
+async def proxy_websocket(path: str, websocket: WebSocket):
+    del path
+    config = load_config()
+    current_path = request_path(websocket)
+    explicit_agent = target_agent_id(current_path)
+
+    log_debug_event(
+        "ws_request_received",
+        websocket,
+        agent_id=str(explicit_agent or ""),
+    )
+
+    if not configuration_complete(config):
+        await websocket.close(code=4403, reason="configuration incomplete")
+        return
+
+    session_data = read_session(websocket, config)
+    if session_data is None:
+        log_auth_event(
+            "auth_failed",
+            websocket,
+            auth_method="session",
+            detail="missing_session",
+        )
+        await websocket.close(code=4401, reason="Dashboard authentication required.")
+        return
+
+    if explicit_agent is not None or current_path in {LOGIN_PATH, LOGOUT_PATH, "/health"}:
+        await websocket.close(code=4404, reason="websocket path not routed")
+        return
+
+    log_auth_event(
+        "auth_success",
+        websocket,
+        agent_id=str(session_data["agent"].agent_id),
+        username=session_data["username"],
+        auth_method="session",
+    )
+    await proxy_websocket_to_agent(
+        session_data["agent"],
+        websocket,
+        authenticated_username=session_data["username"],
+    )
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
