@@ -1494,7 +1494,7 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.6.5", containerfile)
+        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.6.19", containerfile)
         self.assertIn("COPY containers/hermes/entrypoint.sh /entrypoint.sh", containerfile)
         self.assertIn("COPY favicon.ico /tmp/favicon.ico", containerfile)
         self.assertIn("/opt/hermes/hermes_cli/web_dist/favicon.ico", containerfile)
