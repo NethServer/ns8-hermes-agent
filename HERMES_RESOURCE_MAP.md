@@ -1,6 +1,6 @@
 # Hermes Agent Resource Map
 
-*Last verified: 2026-04-06.* Hermes Agent is the open-source, self-improving agent by Nous Research, with official docs at `hermes-agent.nousresearch.com/docs`, the main codebase in `NousResearch/hermes-agent`, and the current latest release listed as `v0.7.0` dated 2026-04-03. ([hermes-agent.nousresearch.com][1])
+*Last verified: 2026-06-23.* Hermes Agent is the open-source, self-improving agent by Nous Research, with official docs at `hermes-agent.nousresearch.com/docs`, the main codebase in `NousResearch/hermes-agent`, and the current latest release listed as `v0.17.0` (`v2026.6.19`) dated 2026-06-19. ([hermes-agent.nousresearch.com][1])
 
 ## 1) Canonical entry points
 
@@ -21,7 +21,7 @@
 
 ### Official release feed
 
-* [GitHub Releases](https://github.com/NousResearch/hermes-agent/releases) — primary source for “what changed recently” and version-by-version trend tracking. Latest visible release is `v0.7.0` on 2026-04-03. ([GitHub][4])
+* [GitHub Releases](https://github.com/NousResearch/hermes-agent/releases) — primary source for “what changed recently” and version-by-version trend tracking. Latest visible release is `v0.17.0` (`v2026.6.19`) on 2026-06-19. ([GitHub][4])
 
 ### Official GitHub org
 
@@ -260,7 +260,7 @@ Use:
 [3]: https://github.com/nousresearch/hermes-agent?utm_source=chatgpt.com "NousResearch/hermes-agent: The agent that grows with you"
 [4]: https://github.com/NousResearch/hermes-agent/releases "Releases · NousResearch/hermes-agent · GitHub"
 [5]: https://github.com/nousresearch?utm_source=chatgpt.com "Nous Research"
-[6]: https://x.com/NousResearch/status/2040147789573714427?utm_source=chatgpt.com "Hermes Agent v0.7.0 is out now. Our headline update"
+[6]: https://x.com/NousResearch "Nous Research on X"
 [7]: https://x.com/Teknium/status/2039102514508058675?utm_source=chatgpt.com "Useful guide for getting started with Hermes Agent:::"
 [8]: https://github.com/NousResearch/hermes-agent-self-evolution?utm_source=chatgpt.com "NousResearch/hermes-agent-self-evolution"
 [9]: https://github.com/NousResearch/hermes-paperclip-adapter?utm_source=chatgpt.com "Paperclip adapter for Hermes Agent"
