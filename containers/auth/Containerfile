@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 RUN pip install --no-cache-dir \
+    aiohttp==3.12.13 \
     fastapi==0.115.12 \
     httpx==0.28.1 \
     itsdangerous==2.2.0 \
