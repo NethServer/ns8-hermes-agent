@@ -304,6 +304,9 @@ def mocked_authproxy_dependencies():
         def __init__(self, *args, **kwargs):
             self.state = types.SimpleNamespace()
             self.lifespan = kwargs.get("lifespan")
+            self.docs_url = kwargs.get("docs_url")
+            self.redoc_url = kwargs.get("redoc_url")
+            self.openapi_url = kwargs.get("openapi_url")
 
         def get(self, *_args, **_kwargs):
             def decorator(function):
@@ -574,6 +577,13 @@ class HermesAuthProxyTest(unittest.TestCase):
         authproxy = self.load_authproxy()
 
         self.assertIsNotNone(authproxy.app.lifespan)
+
+    def test_authproxy_disables_builtin_docs_so_slash_docs_is_proxied(self):
+        authproxy = self.load_authproxy()
+
+        self.assertIsNone(authproxy.app.docs_url, "built-in /docs must be disabled so requests are proxied to hermes")
+        self.assertIsNone(authproxy.app.redoc_url, "built-in /redoc must be disabled")
+        self.assertIsNone(authproxy.app.openapi_url, "built-in /openapi.json must be disabled")
 
     def test_user_search_filter_uses_schema_safe_attributes(self):
         authproxy = self.load_authproxy()
