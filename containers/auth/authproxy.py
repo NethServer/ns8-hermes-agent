@@ -885,6 +885,35 @@ async def health():
     return JSONResponse({"status": "ok"})
 
 
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    """Synthesise an identity object from the NS8 session cookie.
+
+    The Hermes dashboard frontend calls /api/auth/me for auth-bound
+    identity.  When the NS8 authproxy manages the session (not the
+    Hermes-internal auth gate), this endpoint would return 401 upstream.
+    Intercept it here and respond from the authproxy session state."""
+    config = load_config()
+    if not configuration_complete(config):
+        return JSONResponse(
+            {"detail": "dashboard is not configured"},
+            status_code=503,
+        )
+
+    session_data = read_session(request, config)
+    if session_data is None:
+        return JSONResponse(
+            {"detail": "Unauthorized"},
+            status_code=401,
+        )
+
+    username = session_data["username"]
+    return JSONResponse({
+        "user_id": username,
+        "display_name": username,
+    }, status_code=200)
+
+
 @app.post(LOGOUT_PATH)
 async def logout(request: Request):
     form_data = await parse_form_body(request)

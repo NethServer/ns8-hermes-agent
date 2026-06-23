@@ -1152,6 +1152,53 @@ class HermesAuthProxyTest(unittest.TestCase):
         self.assertEqual(upstream_headers[authproxy.AUTHENTICATED_USER_HEADER], "alice")
         self.assertEqual(upstream_headers["Cookie"], "dashboard_cookie=session-cookie")
 
+    def test_auth_me_returns_identity_from_session(self):
+        """GET /api/auth/me synthesises JSON response from NS8 session."""
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        request = self.make_request(
+            None,
+            headers={"x-forwarded-proto": "https"},
+            cookies={
+                authproxy.SESSION_COOKIE: json.dumps(
+                    {
+                        "allowed_user": "alice",
+                        "user_domain": config.user_domain,
+                        "agent_id": 1,
+                    }
+                )
+            },
+            path="/api/auth/me",
+            method="GET",
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config):
+            response = asyncio.run(authproxy.auth_me(request))
+
+        self.assertEqual(response.kwargs["status_code"], 200)
+        body = response.args[0]
+        self.assertEqual(body["user_id"], "alice")
+        self.assertEqual(body["display_name"], "alice")
+
+    def test_auth_me_rejects_missing_session(self):
+        """GET /api/auth/me returns 401 when dashboard session cookie is absent."""
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        request = self.make_request(
+            None,
+            headers={"x-forwarded-proto": "https"},
+            cookies={},
+            path="/api/auth/me",
+            method="GET",
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config):
+            response = asyncio.run(authproxy.auth_me(request))
+
+        self.assertEqual(response.kwargs["status_code"], 401)
+
 
 class HermesModuleStateTest(unittest.TestCase):
     @classmethod
