@@ -1,0 +1,27 @@
+name: NS8 Release on Push to Main
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.github/**'
+      - 'tests/**'
+      - 'README.md'
+      - '.gitignore'
+      - 'LICENSE'
+      - 'renovate.json'
+      - 'test-module.sh'
+
+env:
+  GH_TOKEN: ${{ secrets.NS8_MODULE_RELEASES_TOKEN }}
+
+jobs:
+  release-module:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install NS8 Release Module Extension
+        run: gh extension install NethServer/gh-ns8-release-module
+
+      - name: Create Testing Release
+        run: gh ns8-release-module create --repo ${{ github.repository }} --testing

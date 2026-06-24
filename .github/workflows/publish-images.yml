@@ -1,7 +1,8 @@
 name: "Publish images"
 
 on:
-  push:
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -13,7 +14,9 @@ permissions:
 jobs:
   publish-images:
     if: github.run_number > 1
-    uses: NethServer/ns8-github-actions/.github/workflows/publish-branch.yml@v1
+    uses: ./.github/workflows/build-images.yml
+    with:
+      imagetag: ${{ github.event.release.tag_name || github.ref_name }}
   module:
     needs: publish-images
     uses: NethServer/ns8-github-actions/.github/workflows/module-info.yml@v1

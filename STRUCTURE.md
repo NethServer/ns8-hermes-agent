@@ -154,9 +154,11 @@ This module adds a shared auth proxy and per-agent Unix socket relay between Tra
 - `skills/commit/SKILL.md`: Conventional Commit workflow for staging and committing intended changes.
 - `skills/update-hermes-image/SKILL.md`: focused workflow for changing the upstream Hermes wrapper image and synchronized tests/docs.
 - `workflows/build-apidoc.yml`: builds API documentation artifacts.
+- `workflows/build-images.yml`: reusable image build/publish workflow that tags images from the triggering ref or release tag and keeps the `latest` alias for `main`/`master`.
 - `workflows/clean-apidoc.yml`: cleans generated API documentation artifacts.
 - `workflows/clean-registry.yml`: deletes `ghcr.io` `hermes-agent` package images for deleted refs or manual cleanup runs.
-- `workflows/publish-images.yml`: publishes module and component images.
+- `workflows/create-testing-release.yml`: creates the next testing release for eligible pushes on `main`, while ignoring workflow-only, test-only, and selected docs-only changes.
+- `workflows/publish-images.yml`: publishes module and component images for published GitHub releases and supports manual `workflow_dispatch` runs.
 - `workflows/test-module.yml`: resolves the published module image and delegates module tests to the DigitalOcean infrastructure workflow.
 - `workflows/test-on-digitalocean-infra.yml`: provisions NS8 test clusters on DigitalOcean and runs the selected test script.
 - `workflows/test-ui-build-renovate.yml`: validates UI build behavior for Renovate updates.

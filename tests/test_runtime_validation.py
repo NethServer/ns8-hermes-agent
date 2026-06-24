@@ -30,6 +30,9 @@ SOCKET_CONTAINERFILE_PATH = ROOT / "containers" / "socket" / "Containerfile"
 HERMES_ENTRYPOINT_PATH = ROOT / "containers" / "hermes" / "entrypoint.sh"
 HERMES_DASHBOARD_PATCH_PATH = ROOT / "containers" / "hermes" / "patch_dashboard_source.py"
 BUILD_IMAGES_PATH = ROOT / "build-images.sh"
+BUILD_IMAGES_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "build-images.yml"
+PUBLISH_IMAGES_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "publish-images.yml"
+CREATE_TESTING_RELEASE_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "create-testing-release.yml"
 CREATE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "create-module"
 CONFIGURE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "configure-module"
 DESTROY_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "destroy-module"
@@ -1535,6 +1538,32 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn('"${repobase}/hermes-agent-socket:${imagetag}"', build_script)
         self.assertIn('build_component_image "hermes-agent-socket" "containers/socket"', build_script)
         self.assertIn('--label="org.nethserver.tcp-ports-demand=1"', build_script)
+
+    def test_build_images_workflow_publishes_release_tag_and_latest_alias_from_main(self):
+        workflow = BUILD_IMAGES_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('imagetag="${IMAGETAG:-${GITHUB_REF_NAME}}"', workflow)
+        self.assertIn('buildah push "${image}" "docker://${image}:${IMAGETAG}"', workflow)
+        self.assertIn('if [[ "${IMAGETAG}" == "main" || "${IMAGETAG}" == "master" ]]; then', workflow)
+        self.assertIn('buildah push "${image}" "docker://${image}:latest"', workflow)
+
+    def test_publish_images_workflow_builds_from_release_tags(self):
+        workflow = PUBLISH_IMAGES_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("release:", workflow)
+        self.assertIn("types: [published]", workflow)
+        self.assertNotIn("  push:\n", workflow)
+        self.assertIn("uses: ./.github/workflows/build-images.yml", workflow)
+        self.assertIn("imagetag: ${{ github.event.release.tag_name || github.ref_name }}", workflow)
+
+    def test_create_testing_release_workflow_uses_ns8_release_module_on_main_push(self):
+        workflow = CREATE_TESTING_RELEASE_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("push:", workflow)
+        self.assertIn("branches: [main]", workflow)
+        self.assertIn("NS8_MODULE_RELEASES_TOKEN", workflow)
+        self.assertIn("gh extension install NethServer/gh-ns8-release-module", workflow)
+        self.assertIn("gh ns8-release-module create --repo ${{ github.repository }} --testing", workflow)
 
     def test_hermes_entrypoint_keeps_absolute_virtualenv_activation(self):
         entrypoint = HERMES_ENTRYPOINT_PATH.read_text(encoding="utf-8")

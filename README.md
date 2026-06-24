@@ -157,6 +157,13 @@ The script uses:
 - `REPOBASE`, default `ghcr.io/nethserver`
 - `IMAGETAG`, default `latest`
 
+GitHub Actions now follows the same NS8 release-versioning pattern used by `nethesis/ns8-nethvoice`:
+
+- eligible pushes on `main` create a new testing release through `gh ns8-release-module create --testing` (workflow-only, test-only, and selected docs-only changes are ignored)
+- every published GitHub release then builds and publishes the module images tagged with that release version; `workflow_dispatch` can also run the publish workflow manually
+- the reusable `.github/workflows/build-images.yml` workflow keeps the same ref-name normalization and `latest` alias behavior as `ns8-nethvoice`
+- testing-release creation requires the `NS8_MODULE_RELEASES_TOKEN` repository secret
+
 ## Install
 
 Instantiate the module with:
