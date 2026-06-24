@@ -11,6 +11,12 @@ on:
       - 'LICENSE'
       - 'renovate.json'
       - 'test-module.sh'
+  workflow_dispatch:
+    inputs:
+      branch_or_env:
+        description: "Target"
+        required: false
+        default: "main"
 
 env:
   GH_TOKEN: ${{ secrets.NS8_MODULE_RELEASES_TOKEN }}
