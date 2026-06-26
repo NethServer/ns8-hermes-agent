@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir --break-system-packages \
     pytesseract \
     pdf2image
 
+RUN cd /opt/hermes && npx agent-browser install --with-deps
 COPY containers/hermes/entrypoint.sh /entrypoint.sh
 
 USER root
