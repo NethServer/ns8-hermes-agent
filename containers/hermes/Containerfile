@@ -18,17 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-google-auth-oauthlib \
     vim
 
-USER hermes
-
 RUN pip install --no-cache-dir --break-system-packages \
     ddgs \
     pytesseract \
     pdf2image
 
 RUN cd /opt/hermes && npx agent-browser install --with-deps
-COPY containers/hermes/entrypoint.sh /entrypoint.sh
-
-USER root
 
 RUN cd /opt/hermes/web && npm install && npm run build
 COPY favicon.ico /tmp/favicon.ico
@@ -39,8 +34,13 @@ RUN install -Dm0644 /tmp/favicon.ico /opt/hermes/hermes_cli/web_dist/favicon.ico
 RUN cd && npm install -g @qwen-code/qwen-code@latest
 
 RUN apt-get clean autoclean && apt-get autoremove --yes && rm -rf /var/lib/{apt,dpkg,cache,log}/* && touch /var/lib/dpkg/status
-RUN chown -R hermes:hermes /opt/hermes /opt/data
 
-USER hermes
+# Preserve the upstream s6 runtime contract:
+# - /init must remain PID 1 via the inherited ENTRYPOINT
+# - cont-init runs as root and later drops supervised Hermes processes to the hermes user
+RUN chown -R root:root /opt/hermes \
+    && chmod -R a+rX /opt/hermes \
+    && chmod -R a-w /opt/hermes \
+    && mkdir -p /opt/data
 
-ENTRYPOINT [ "/entrypoint.sh" ]
+USER root
