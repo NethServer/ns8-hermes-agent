@@ -150,12 +150,19 @@ Build the module image, auth proxy image, Hermes wrapper image, and socket relay
 bash build-images.sh
 ```
 
-The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.6.19` (Hermes release `v0.17.0`). The wrapper preserves the upstream s6-overlay runtime model: `/init` remains PID 1, dashboard supervision comes from the upstream container, and the module only layers extra packages, browser dependencies, and web asset customizations on top.
+The Hermes wrapper image is built from `docker.io/nousresearch/hermes-agent:v2026.6.19` (`Hermes Agent v0.17.0`). The wrapper no longer patches or rebuilds dashboard web sources at startup; it bootstraps the Hermes home and points `HERMES_WEB_DIST` at the bundled upstream `web_dist` when present.
 
 The script uses:
 
 - `REPOBASE`, default `ghcr.io/nethserver`
 - `IMAGETAG`, default `latest`
+
+GitHub Actions now follows the same NS8 release-versioning pattern used by `nethesis/ns8-nethvoice`:
+
+- eligible pushes on `main` create a new testing release through `gh ns8-release-module create --testing` (workflow-only, test-only, and selected docs-only changes are ignored)
+- every published GitHub release then builds and publishes the module images tagged with that release version; `workflow_dispatch` can also run the publish workflow manually
+- the reusable `.github/workflows/build-images.yml` workflow keeps the same ref-name normalization and `latest` alias behavior as `ns8-nethvoice`
+- testing-release creation requires the `NS8_MODULE_RELEASES_TOKEN` repository secret
 
 ## Install
 
