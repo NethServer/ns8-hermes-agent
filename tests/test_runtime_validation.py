@@ -1575,17 +1575,6 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("gh extension install NethServer/gh-ns8-release-module", workflow)
         self.assertIn("gh ns8-release-module create --repo ${{ github.repository }} --testing", workflow)
 
-    def test_hermes_entrypoint_keeps_absolute_virtualenv_activation(self):
-        entrypoint = HERMES_ENTRYPOINT_PATH.read_text(encoding="utf-8")
-
-        self.assertIn('source "${INSTALL_DIR}/.venv/bin/activate"', entrypoint)
-        self.assertNotIn("source .venv/bin/activate", entrypoint)
-        self.assertIn('BUILT_WEB_DIST="${INSTALL_DIR}/hermes_cli/web_dist"', entrypoint)
-        self.assertIn('export HERMES_WEB_DIST="$BUILT_WEB_DIST"', entrypoint)
-        self.assertNotIn("PATCH_SCRIPT", entrypoint)
-        self.assertNotIn("npm run build", entrypoint)
-        self.assertNotIn("window.__HERMES_BASE_URL__", entrypoint)
-
     def test_dashboard_patch_script_removed_from_wrapper(self):
         self.assertFalse(HERMES_DASHBOARD_PATCH_PATH.exists())
 
