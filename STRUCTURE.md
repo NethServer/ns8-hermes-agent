@@ -119,7 +119,7 @@ The user units own long-running container lifecycle through `systemctl --user`, 
 
 - `containers/auth/Containerfile`: shared dashboard auth proxy image.
 - `containers/auth/authproxy.py`: FastAPI auth proxy that authenticates the shared virtualhost against LDAP, issues a host-wide session cookie, preserves the dashboard upstream `Authorization` header, replaces any inbound `X-Hermes-Authenticated-User` value with a trusted value derived from the authenticated session username, logs auth attempts and outcomes to stdout, and proxies authenticated sessions to the assigned dashboard upstream from `authproxy_agents.json`, including `upstream_socket` records.
-- `containers/hermes/Containerfile`: Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.6.19` (Hermes release `v0.17.0`) that keeps the upstream `/init` + s6-overlay entrypoint and only layers NS8-specific packages and web assets.
+- `containers/hermes/Containerfile`: Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.6.19` (Hermes release `v0.17.0`) that keeps the upstream `/init` + s6-overlay entrypoint and only layers NS8-specific packages, web assets, and the optional Edge TTS plus Feishu/Lark runtime dependencies.
 - `containers/socket/Containerfile`: minimal Alpine-based socket relay image that runs `socat` for the per-agent dashboard sidecar.
 
 ## `ui/`
