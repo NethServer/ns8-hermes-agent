@@ -1502,6 +1502,9 @@ class HermesModuleStateTest(unittest.TestCase):
 
         self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.6.19", containerfile)
         self.assertIn("RUN cd /opt/hermes && npx agent-browser install --with-deps", containerfile)
+        self.assertIn("edge-tts==7.2.7", containerfile)
+        self.assertIn("lark-oapi==1.5.3", containerfile)
+        self.assertIn("qrcode==7.4.2", containerfile)
         self.assertNotIn("COPY containers/hermes/entrypoint.sh /entrypoint.sh", containerfile)
         self.assertNotIn('ENTRYPOINT [ "/entrypoint.sh" ]', containerfile)
         self.assertNotIn("USER hermes", containerfile)
