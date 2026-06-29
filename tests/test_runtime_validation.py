@@ -1450,9 +1450,12 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("--mount type=volume,src=hermes-agents-home,dst=/opt/data,subpath=%i", service_template)
         self.assertNotIn("--volume %S/state/agents/%i/home:/opt/data:Z", service_template)
         self.assertIn("--env-file %S/state/agents/%i/agent.env", service_template)
-        self.assertNotIn("ensure-agent-home-ownership --agent-id %i", service_template)
         self.assertIn("--env-file %S/state/secrets/%i.env", service_template)
         self.assertIn("API_SERVER_ENABLED=true", service_template)
+        self.assertIn("HERMES_DASHBOARD=true", service_template)
+        self.assertIn("HERMES_DASHBOARD_HOST=127.0.0.1", service_template)
+        self.assertIn("HERMES_DASHBOARD_PORT=9120", service_template)
+        self.assertIn("HERMES_DASHBOARD_INSECURE=true", service_template)
         self.assertIn("gateway run", service_template)
         self.assertNotIn("seed-agent-home", service_template)
 
@@ -1494,8 +1497,13 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.6.5", containerfile)
-        self.assertIn("COPY containers/hermes/entrypoint.sh /entrypoint.sh", containerfile)
+        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.6.19", containerfile)
+        self.assertIn("RUN cd /opt/hermes && npx agent-browser install --with-deps", containerfile)
+        self.assertNotIn("COPY containers/hermes/entrypoint.sh /entrypoint.sh", containerfile)
+        self.assertNotIn('ENTRYPOINT [ "/entrypoint.sh" ]', containerfile)
+        self.assertNotIn("USER hermes", containerfile)
+        self.assertIn("USER root", containerfile)
+        self.assertIn("/init", containerfile)
         self.assertIn("COPY favicon.ico /tmp/favicon.ico", containerfile)
         self.assertIn("/opt/hermes/hermes_cli/web_dist/favicon.ico", containerfile)
         self.assertIn("/opt/hermes/web/public/favicon.ico", containerfile)
@@ -1536,16 +1544,8 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn('build_component_image "hermes-agent-socket" "containers/socket"', build_script)
         self.assertIn('--label="org.nethserver.tcp-ports-demand=1"', build_script)
 
-    def test_hermes_entrypoint_keeps_absolute_virtualenv_activation(self):
-        entrypoint = HERMES_ENTRYPOINT_PATH.read_text(encoding="utf-8")
-
-        self.assertIn('source "${INSTALL_DIR}/.venv/bin/activate"', entrypoint)
-        self.assertNotIn("source .venv/bin/activate", entrypoint)
-        self.assertIn('BUILT_WEB_DIST="${INSTALL_DIR}/hermes_cli/web_dist"', entrypoint)
-        self.assertIn('export HERMES_WEB_DIST="$BUILT_WEB_DIST"', entrypoint)
-        self.assertNotIn("PATCH_SCRIPT", entrypoint)
-        self.assertNotIn("npm run build", entrypoint)
-        self.assertNotIn("window.__HERMES_BASE_URL__", entrypoint)
+    def test_hermes_wrapper_drops_legacy_custom_entrypoint(self):
+        self.assertFalse(HERMES_ENTRYPOINT_PATH.exists())
 
     def test_dashboard_patch_script_removed_from_wrapper(self):
         self.assertFalse(HERMES_DASHBOARD_PATCH_PATH.exists())
