@@ -20,8 +20,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir --break-system-packages \
     ddgs \
+    edge-tts==7.2.7 \
+    lark-oapi==1.5.3 \
     pytesseract \
-    pdf2image
+    pdf2image \
+    qrcode==7.4.2
 
 RUN cd /opt/hermes && npx agent-browser install --with-deps
 
