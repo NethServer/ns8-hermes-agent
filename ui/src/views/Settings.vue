@@ -194,7 +194,10 @@
                           ></cv-tag>
                         </cv-structured-list-data>
                         <cv-structured-list-data class="break-word">
-                          {{ agentData.allowed_user || $t("settings.allowed_user_not_set") }}
+                          {{
+                            agentData.allowed_user ||
+                            $t("settings.allowed_user_not_set")
+                          }}
                         </cv-structured-list-data>
                         <cv-structured-list-data class="break-word">
                           <cv-link
@@ -909,7 +912,10 @@ export default {
           return false;
         }
 
-        return this.normalizeAllowedUser(agentData.allowed_user) === normalizedAllowedUser;
+        return (
+          this.normalizeAllowedUser(agentData.allowed_user) ===
+          normalizedAllowedUser
+        );
       });
     },
     normalizeUserDomains(domains) {
@@ -949,9 +955,10 @@ export default {
       return `${domainData.name} (${details.join(", ")})`;
     },
     domainUserLabel(userData) {
-      const label = userData.display_name && userData.display_name !== userData.user
-        ? `${userData.display_name} (${userData.user})`
-        : userData.user;
+      const label =
+        userData.display_name && userData.display_name !== userData.user
+          ? `${userData.display_name} (${userData.user})`
+          : userData.user;
 
       if (!userData.locked) {
         return label;
@@ -1118,7 +1125,9 @@ export default {
             this.focusElement("userDomain");
             isValidationOk = false;
           }
-        } else if (!this.normalizeAllowedUser(this.createAgentForm.allowed_user)) {
+        } else if (
+          !this.normalizeAllowedUser(this.createAgentForm.allowed_user)
+        ) {
           this.error.createAgentAllowedUser = this.$t(
             "settings.allowed_user_required"
           );
@@ -1175,7 +1184,9 @@ export default {
             this.focusElement("userDomain");
             isValidationOk = false;
           }
-        } else if (!this.normalizeAllowedUser(this.editAgentForm.allowed_user)) {
+        } else if (
+          !this.normalizeAllowedUser(this.editAgentForm.allowed_user)
+        ) {
           this.error.editAgentAllowedUser = this.$t(
             "settings.allowed_user_required"
           );
@@ -1185,7 +1196,10 @@ export default {
             isValidationOk = false;
           }
         } else if (
-          this.allowedUserInUse(this.editAgentForm.allowed_user, this.agentToEdit.id)
+          this.allowedUserInUse(
+            this.editAgentForm.allowed_user,
+            this.agentToEdit.id
+          )
         ) {
           this.error.editAgentAllowedUser = this.$t(
             "settings.allowed_user_invalid"
@@ -1344,7 +1358,9 @@ export default {
       this.clearEditAgentErrors();
     },
     sanitizeAllowedUsers() {
-      const validUsers = new Set(this.domainUsers.map((userData) => userData.user));
+      const validUsers = new Set(
+        this.domainUsers.map((userData) => userData.user)
+      );
       if (!validUsers.size) {
         return;
       }
