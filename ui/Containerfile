@@ -1,4 +1,6 @@
-FROM node:24-bookworm-slim
+FROM node:24-bookworm
+RUN corepack enable \
+    && yarn set version stable
 WORKDIR /app
 ENV NODE_OPTIONS=--openssl-legacy-provider
 EXPOSE 8080
