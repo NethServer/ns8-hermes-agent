@@ -57,7 +57,7 @@ buildah run \
     --workingdir=/usr/src/ui \
     --env="NODE_OPTIONS=--openssl-legacy-provider" \
     nodebuilder-hermes-agent \
-    sh -c "yarn install && yarn build"
+    sh -c "corepack enable && yarn install && yarn build"
 
 build_component_image "hermes-agent-auth" "containers/auth"
 build_component_image "hermes-agent-hermes" "." "containers/hermes/Containerfile"
