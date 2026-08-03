@@ -48,7 +48,7 @@ The module publishes:
 
 - `ghcr.io/nethserver/hermes-agent`: the NS8 module image
 - `ghcr.io/nethserver/hermes-agent-auth`: the shared dashboard auth proxy image
-- `ghcr.io/nethserver/hermes-agent-hermes`: the Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.7.7.2` (`Hermes Agent v0.18.2`)
+- `ghcr.io/nethserver/hermes-agent-hermes`: the Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.7.30` (`Hermes Agent v0.19.1`)
 - `ghcr.io/nethserver/hermes-agent-socket`: the per-agent dashboard socket relay image
 
 `build-images.sh` builds all four images.
