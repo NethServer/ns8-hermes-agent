@@ -166,15 +166,8 @@ When `USER_DOMAIN` is configured, `sync-agent-runtime` also writes these public 
 
 - `AGENT_ALLOWED_USER`
 - `USER_DOMAIN`
-- `LDAP_HOST`
-- `LDAP_PORT`
-- `LDAP_BASE_DN`
-- `LDAP_SCHEMA`
 
-and these LDAP bind values into each generated `secrets/<id>.env` file:
-
-- `LDAP_BIND_DN`
-- `LDAP_BIND_PASSWORD`
+LDAP connection details (`LDAP_HOST`, `LDAP_PORT`, `LDAP_BASE_DN`, `LDAP_SCHEMA`) and bind credentials (`LDAP_BIND_DN`, `LDAP_BIND_PASSWORD`) are written only into `authproxy.env` and `authproxy_secrets.env`. Agent containers run model-directed tools and must never receive directory credentials.
 
 ## Service model
 

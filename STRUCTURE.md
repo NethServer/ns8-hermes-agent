@@ -33,7 +33,7 @@ There is no `state-exclude.conf` because the current backup scope is explicit an
 
 - `state/environment`: shared non-secret module environment, including core-managed image references and the reserved `TCP_PORT`.
 - `state/secrets/shared.env`: module-wide secrets such as shared SMTP and auth proxy private values.
-- `state/secrets/<id>.env`: generated per-agent Hermes secrets, including `API_SERVER_KEY` and LDAP bind values when a user domain is configured.
+- `state/secrets/<id>.env`: generated per-agent Hermes secrets, including `API_SERVER_KEY` and the shared `SMTP_PASSWORD`. LDAP bind values are never written here.
 - `state/agents/<id>/metadata.json`: canonical per-agent desired configuration.
 - `state/agents/<id>/agent.env`: generated per-agent public runtime environment.
 - `state/authproxy.env`, `state/authproxy_secrets.env`, `state/authproxy_agents.json`, and `state/dashboard-sockets/`: generated shared auth runtime files that are intentionally regenerated rather than backed up.
@@ -53,7 +53,7 @@ Action directories contain numbered executable steps plus JSON schemas for publi
 - `configure-module/40remove-deleted-agents`: stops removed services, removes removed pods and containers including `hermes-socket-<id>`, and delegates generated-state cleanup.
 - `configure-module/50write-agent-metadata`: stores one metadata file per desired agent, including persisted `allowed_user`.
 - `configure-module/60refresh-shared-settings`: refreshes shared SMTP settings via `discover-smarthost`.
-- `configure-module/70sync-agent-runtime`: regenerates `agents/<id>/agent.env` and `secrets/<id>.env`, generates or preserves a unique per-agent `API_SERVER_KEY`, includes the live auth proxy LDAP runtime env, bind secrets, and per-agent `AGENT_ALLOWED_USER` when a shared `user_domain` is configured, and writes `authproxy_agents.json` `upstream_socket` entries.
+- `configure-module/70sync-agent-runtime`: regenerates `agents/<id>/agent.env` and `secrets/<id>.env`, generates or preserves a unique per-agent `API_SERVER_KEY`, includes `USER_DOMAIN` and per-agent `AGENT_ALLOWED_USER` when a shared `user_domain` is configured, writes the LDAP runtime env and bind secrets only into the auth proxy files, and writes `authproxy_agents.json` `upstream_socket` entries.
 - `configure-module/75seed-agent-home`: runs a one-shot Hermes container to seed strict first-write-only `SOUL.md` and `.env` content into the agent's subdir inside the shared `hermes-agents-home` volume from checked-in templates.
 - `configure-module/80reload-systemd`: reloads the user systemd manager.
 - `configure-module/90reconcile-desired-routes`: creates, updates, or deletes the shared Traefik auth route for the desired configuration.
@@ -82,7 +82,7 @@ Typical NS8 actions that are intentionally absent: `get-status`, which remains i
 - `discover-smarthost`: reads cluster smarthost settings and writes public values into `environment` and `SMTP_PASSWORD` into `secrets/shared.env`.
 - `ensure-agent-home-ownership`: runs a one-shot root helper container from the configured Hermes image and recursively assigns the per-agent subdir inside `hermes-agents-home` to that image's dynamic `hermes` UID/GID when needed.
 - `remove-agent-state`: removes generated per-agent secrets files (`secrets/<id>.env`), dashboard socket files, agent state directories (which include `agents/<id>/agent.env`), and the per-agent subdir inside the shared `hermes-agents-home` volume.
-- `sync-agent-runtime`: writes `agents/<id>/agent.env` and `secrets/<id>.env` for each configured agent, generates or preserves a unique per-agent `API_SERVER_KEY`, includes the live auth proxy LDAP env and bind secrets when `USER_DOMAIN` is set, and generates `authproxy_agents.json` `upstream_socket` records.
+- `sync-agent-runtime`: writes `agents/<id>/agent.env` and `secrets/<id>.env` for each configured agent, generates or preserves a unique per-agent `API_SERVER_KEY`, writes the LDAP env and bind secrets into the auth proxy files only when `USER_DOMAIN` is set, and generates `authproxy_agents.json` `upstream_socket` records.
 
 ### `imageroot/update-module.d/`
 
@@ -99,7 +99,7 @@ Typical NS8 actions that are intentionally absent: `get-status`, which remains i
 ### `imageroot/pypkg/`
 
 - `hermes_agent_state.py`: small shared helper for metadata validation, env/json file handling, dashboard socket naming, named-volume and secrets-directory layout (`SECRETS_DIR`, `AGENTS_HOME_VOLUME`, `SHARED_SECRETS_ENVFILE`), and the `list_known_agent_ids()` scanner.
-- `hermes_user_domain.py`: shared helper for user-domain normalization, `Ldapproxy` lookup, LDAP user listing, and generation of per-agent LDAP runtime env and bind secrets.
+- `hermes_user_domain.py`: shared helper for user-domain normalization, `Ldapproxy` lookup, LDAP user listing, and generation of the auth proxy LDAP runtime env and bind secrets.
 
 ### `imageroot/systemd/user/`
 

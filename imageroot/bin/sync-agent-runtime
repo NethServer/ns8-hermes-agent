@@ -92,9 +92,11 @@ def build_agent_public_env(agent_data, shared_environment):
     if allowed_user:
         env_data[AGENT_ALLOWED_USER_ENV] = allowed_user
 
+    # Only the shared auth proxy talks to LDAP. Agents get the domain name for
+    # display purposes and nothing that would let them reach the directory.
     user_domain = (shared_environment.get(USER_DOMAIN_ENV) or "").strip().lower()
     if user_domain:
-        env_data.update(public_runtime_env(user_domain))
+        env_data[USER_DOMAIN_ENV] = user_domain
 
     for key in SMTP_PUBLIC_KEYS:
         value = shared_environment.get(key)
@@ -111,7 +113,8 @@ def build_agent_secrets(
     reserved_api_server_keys=None,
 ):
     # Preserve each agent secret across regenerations while still projecting the
-    # current module-wide SMTP and LDAP bind credentials into the private file.
+    # current module-wide SMTP password into the private file. LDAP bind
+    # credentials are deliberately never handed to agent containers.
     if reserved_api_server_keys is None:
         reserved_api_server_keys = set()
 
@@ -130,10 +133,6 @@ def build_agent_secrets(
     smtp_password = shared_secrets.get(SMTP_SECRET_KEY)
     if smtp_password:
         env_data[SMTP_SECRET_KEY] = smtp_password
-
-    user_domain = (shared_environment.get(USER_DOMAIN_ENV) or "").strip().lower()
-    if user_domain:
-        env_data.update(secrets_runtime_env(user_domain))
 
     return env_data
 

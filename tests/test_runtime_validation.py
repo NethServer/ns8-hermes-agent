@@ -1794,10 +1794,9 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertEqual(public_env["AGENT_ALLOWED_USER"], "alice")
             self.assertEqual(public_env["SMTP_HOST"], "smtp.example.org")
             self.assertEqual(public_env["USER_DOMAIN"], "example.org")
-            self.assertEqual(public_env["LDAP_HOST"], "10.0.2.2")
-            self.assertEqual(public_env["LDAP_PORT"], "389")
-            self.assertEqual(public_env["LDAP_BASE_DN"], "dc=example,dc=org")
-            self.assertEqual(public_env["LDAP_SCHEMA"], "rfc2307")
+            # Agents must never learn how to reach the directory service.
+            self.assertFalse([key for key in public_env if key.startswith("LDAP_")])
+            self.assertFalse([key for key in agent_secrets if key.startswith("LDAP_")])
             self.assertEqual(
                 set(public_env),
                 {
@@ -1806,10 +1805,6 @@ class HermesModuleStateTest(unittest.TestCase):
                     "AGENT_NAME",
                     "AGENT_ROLE",
                     "BASE_VIRTUALHOST",
-                    "LDAP_BASE_DN",
-                    "LDAP_HOST",
-                    "LDAP_PORT",
-                    "LDAP_SCHEMA",
                     "SMTP_ENABLED",
                     "SMTP_HOST",
                     "TIMEZONE",
@@ -1817,8 +1812,6 @@ class HermesModuleStateTest(unittest.TestCase):
                     "USER_DOMAIN",
                 },
             )
-            self.assertEqual(agent_secrets["LDAP_BIND_DN"], "cn=ldapservice,dc=example,dc=org")
-            self.assertEqual(agent_secrets["LDAP_BIND_PASSWORD"], "ldap-secret")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "secret-pass")
             self.assertTrue(agent_secrets["HERMES_AGENT_SECRET"])
             self.assertTrue(agent_secrets["API_SERVER_KEY"])
@@ -1827,8 +1820,6 @@ class HermesModuleStateTest(unittest.TestCase):
                 {
                     "API_SERVER_KEY",
                     "HERMES_AGENT_SECRET",
-                    "LDAP_BIND_DN",
-                    "LDAP_BIND_PASSWORD",
                     "SMTP_PASSWORD",
                 },
             )
