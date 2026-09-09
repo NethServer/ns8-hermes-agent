@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import sys
+import time
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from html import escape
@@ -45,6 +47,11 @@ WEBSOCKET_HANDSHAKE_HEADERS = {
     "origin",
 }
 LOGGER = logging.getLogger("hermes.authproxy")
+# Failed form logins per client address and per username inside a sliding
+# window; the next attempt above the limit is rejected before touching LDAP.
+LOGIN_MAX_FAILURES = 5
+LOGIN_FAILURE_WINDOW_SECONDS = 60
+LOGIN_THROTTLE_MAX_KEYS = 10000
 
 
 @dataclass(frozen=True)
@@ -94,6 +101,84 @@ def env_flag(name, default=False):
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
+
+
+def env_int(name, default):
+    value = env(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+class LoginThrottle:
+    """Sliding-window failure counter for the form login.
+
+    Keys are opaque strings (``ip:<addr>`` and ``user:<name>``). Once a key has
+    ``max_failures`` failures inside ``window_seconds`` further attempts are
+    refused until the oldest failure ages out. State is process-local, which is
+    enough to blunt credential stuffing against a single proxy container.
+    """
+
+    def __init__(self, max_failures=LOGIN_MAX_FAILURES, window_seconds=LOGIN_FAILURE_WINDOW_SECONDS, clock=time.monotonic):
+        self.max_failures = max(1, int(max_failures))
+        self.window_seconds = max(1, int(window_seconds))
+        self.clock = clock
+        self._failures = {}
+
+    def _prune(self, key, now):
+        failures = self._failures.get(key)
+        if failures is None:
+            return None
+        cutoff = now - self.window_seconds
+        while failures and failures[0] <= cutoff:
+            failures.popleft()
+        if not failures:
+            self._failures.pop(key, None)
+            return None
+        return failures
+
+    def retry_after(self, keys):
+        now = self.clock()
+        longest_wait = 0
+        for key in keys:
+            failures = self._prune(key, now)
+            if failures is not None and len(failures) >= self.max_failures:
+                wait = int(failures[0] + self.window_seconds - now) + 1
+                longest_wait = max(longest_wait, wait)
+        return longest_wait
+
+    def record_failure(self, keys):
+        now = self.clock()
+        for key in keys:
+            failures = self._prune(key, now)
+            if failures is None:
+                if len(self._failures) >= LOGIN_THROTTLE_MAX_KEYS:
+                    # Drop the stalest bucket so a flood of distinct keys cannot
+                    # grow memory without bound.
+                    oldest_key = min(self._failures, key=lambda item: self._failures[item][-1])
+                    self._failures.pop(oldest_key, None)
+                failures = self._failures.setdefault(key, deque())
+            failures.append(now)
+
+    def clear(self, keys):
+        for key in keys:
+            self._failures.pop(key, None)
+
+
+LOGIN_THROTTLE = LoginThrottle(
+    max_failures=env_int("AUTH_PROXY_LOGIN_MAX_FAILURES", LOGIN_MAX_FAILURES),
+    window_seconds=env_int("AUTH_PROXY_LOGIN_WINDOW_SECONDS", LOGIN_FAILURE_WINDOW_SECONDS),
+)
+
+
+def login_throttle_keys(request, username):
+    keys = [f"ip:{client_host(request)}"]
+    if username:
+        keys.append(f"user:{username.lower()}")
+    return keys
 
 
 def configure_logging():
@@ -404,7 +489,7 @@ def configuration_required_response():
     return HTMLResponse(html, status_code=503, headers={"Cache-Control": "no-store"})
 
 
-def login_form_response(config, request, error_message="", username="", explicit_agent_id=None, next_path="/"):
+def login_form_response(config, request, error_message="", username="", explicit_agent_id=None, next_path="/", status_code=None, extra_headers=None):
     target_record = config.agents_by_id.get(explicit_agent_id) if explicit_agent_id is not None else None
     title = target_record.display_name if target_record is not None else "Hermes dashboard login"
     heading = f"Sign in to {target_record.display_name}" if target_record is not None else "Sign in to your Hermes dashboard"
@@ -494,7 +579,12 @@ def login_form_response(config, request, error_message="", username="", explicit
   </body>
 </html>
 """
-    return HTMLResponse(html, status_code=401 if error_message else 200, headers={"Cache-Control": "no-store"})
+    if status_code is None:
+        status_code = 401 if error_message else 200
+    headers = {"Cache-Control": "no-store"}
+    if extra_headers:
+        headers.update(extra_headers)
+    return HTMLResponse(html, status_code=status_code, headers=headers)
 
 
 def status_page_response(session_data, current_path):
@@ -1003,8 +1093,34 @@ async def proxy(path: str, request: Request):
             auth_method="form",
         )
 
+        throttle_keys = login_throttle_keys(request, username)
+        retry_after = LOGIN_THROTTLE.retry_after(throttle_keys)
+        if retry_after > 0:
+            log_auth_event(
+                "auth_failed",
+                request,
+                agent_id=str(explicit_agent or ""),
+                username=username,
+                auth_method="form",
+                detail=f"rate_limited retry_after={retry_after}",
+            )
+            return login_form_response(
+                config,
+                request,
+                error_message=f"Too many failed sign-in attempts. Try again in {retry_after} seconds.",
+                username=username,
+                explicit_agent_id=explicit_agent,
+                next_path=next_path,
+                status_code=429,
+                extra_headers={"Retry-After": str(retry_after)},
+            )
+
         target_record = login_target_agent(config, username, explicit_agent_id=explicit_agent)
-        if target_record is None or not authenticate_credentials(username, password, config):
+        # Always verify the password, even for unassigned accounts, so response
+        # timing does not reveal which usernames have a dashboard.
+        authenticated = authenticate_credentials(username, password, config)
+        if target_record is None or not authenticated:
+            LOGIN_THROTTLE.record_failure(throttle_keys)
             log_auth_event(
                 "auth_failed",
                 request,
@@ -1022,6 +1138,7 @@ async def proxy(path: str, request: Request):
                 next_path=next_path,
             )
 
+        LOGIN_THROTTLE.clear(throttle_keys)
         response = RedirectResponse(next_path, status_code=303)
         response.set_cookie(
             SESSION_COOKIE,
@@ -1084,9 +1201,19 @@ async def proxy(path: str, request: Request):
     )
 
 
-if __name__ == "__main__":
+def run_server():
+    # The listener is published on the node loopback only and every request
+    # arrives through Traefik, so trust X-Forwarded-For/-Proto from any peer.
+    # Without this, request.client is the slirp4netns gateway address and the
+    # audit log cannot tell clients apart.
     uvicorn.run(
         app,
         host=env("AUTH_PROXY_HOST", "0.0.0.0"),
-        port=int(env("AUTH_PROXY_PORT", "9119") or "9119"),
+        port=env_int("AUTH_PROXY_PORT", 9119),
+        proxy_headers=True,
+        forwarded_allow_ips="*",
     )
+
+
+if __name__ == "__main__":
+    run_server()

@@ -706,6 +706,101 @@ class HermesAuthProxyTest(unittest.TestCase):
         self.assertIn("event=auth_failed", logged_messages[1])
         self.assertIn("detail=invalid_credentials_or_assignment", logged_messages[1])
 
+    def test_login_throttle_blocks_after_max_failures_and_recovers(self):
+        authproxy = self.load_authproxy()
+        now = [1000.0]
+        throttle = authproxy.LoginThrottle(max_failures=3, window_seconds=60, clock=lambda: now[0])
+        keys = ["ip:198.51.100.42", "user:alice"]
+
+        self.assertEqual(throttle.retry_after(keys), 0)
+        for _ in range(3):
+            throttle.record_failure(keys)
+        self.assertGreater(throttle.retry_after(keys), 0)
+        self.assertGreater(throttle.retry_after(["user:alice"]), 0, "per-user bucket must also lock")
+        self.assertEqual(throttle.retry_after(["ip:203.0.113.9"]), 0, "other clients are unaffected")
+
+        now[0] += 61
+        self.assertEqual(throttle.retry_after(keys), 0, "failures age out of the window")
+
+        throttle.record_failure(keys)
+        throttle.clear(keys)
+        self.assertEqual(throttle.retry_after(keys), 0)
+
+    def test_proxy_rate_limits_repeated_failed_logins_before_ldap(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+        authproxy.LOGIN_THROTTLE = authproxy.LoginThrottle(max_failures=2, window_seconds=60)
+
+        class FakeUpstreamClient:
+            async def request(self, *args, **kwargs):
+                raise AssertionError("upstream should not be called when auth fails")
+
+        def make_login_request():
+            return self.make_request(
+                FakeUpstreamClient(),
+                headers={"content-type": "application/x-www-form-urlencoded"},
+                path="/login",
+                method="POST",
+                body=b"username=alice&password=wrong&next=%2F",
+            )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy,
+            "authenticate_credentials",
+            return_value=False,
+        ) as authenticate, mock.patch.object(authproxy.LOGGER, "info") as log_info:
+            first = asyncio.run(authproxy.proxy("", make_login_request()))
+            second = asyncio.run(authproxy.proxy("", make_login_request()))
+            third = asyncio.run(authproxy.proxy("", make_login_request()))
+
+        self.assertEqual(first.kwargs["status_code"], 401)
+        self.assertEqual(second.kwargs["status_code"], 401)
+        self.assertEqual(third.kwargs["status_code"], 429)
+        self.assertIn("Retry-After", third.kwargs["headers"])
+        self.assertEqual(authenticate.call_count, 2, "the throttled attempt must not reach LDAP")
+        logged_messages = [call.args[0] for call in log_info.call_args_list]
+        self.assertIn("detail=rate_limited", logged_messages[-1])
+        self.assertIn("user=alice", logged_messages[-1])
+
+    def test_proxy_verifies_password_even_for_unassigned_users(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        class FakeUpstreamClient:
+            async def request(self, *args, **kwargs):
+                raise AssertionError("upstream should not be called when auth fails")
+
+        request = self.make_request(
+            FakeUpstreamClient(),
+            headers={"content-type": "application/x-www-form-urlencoded"},
+            path="/login",
+            method="POST",
+            body=b"username=mallory&password=guess&next=%2F",
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy,
+            "authenticate_credentials",
+            return_value=True,
+        ) as authenticate, mock.patch.object(authproxy.LOGGER, "info"):
+            response = asyncio.run(authproxy.proxy("", request))
+
+        self.assertEqual(response.kwargs["status_code"], 401)
+        authenticate.assert_called_once()
+
+    def test_run_server_trusts_forwarded_headers_from_traefik(self):
+        authproxy = self.load_authproxy()
+
+        with mock.patch.object(authproxy.uvicorn, "run") as uvicorn_run, mock.patch.dict(
+            os.environ, {"AUTH_PROXY_PORT": "9119"}, clear=False
+        ):
+            authproxy.run_server()
+
+        uvicorn_run.assert_called_once()
+        self.assertTrue(uvicorn_run.call_args.kwargs["proxy_headers"])
+        self.assertEqual(uvicorn_run.call_args.kwargs["forwarded_allow_ips"], "*")
+        self.assertEqual(uvicorn_run.call_args.kwargs["port"], 9119)
+
     def test_proxy_returns_502_when_upstream_read_fails(self):
         authproxy = self.load_authproxy()
         config = self.runtime_config(authproxy)

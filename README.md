@@ -251,7 +251,8 @@ Example output:
 If `base_virtualhost` is configured, `https://<base_virtualhost>/` is the primary shared entrypoint.
 The shared auth service authenticates against the shared `user_domain`, maps the authenticated username to exactly one assigned running agent, and proxies the rest of that session's requests to the selected dashboard.
 `https://<base_virtualhost>/hermes-N/` remains an auth-owned login or session-status page for agent `N`; it is no longer a Traefik path route to the dashboard itself.
-The auth proxy logs `auth_attempt`, `auth_success`, `auth_failed`, and `proxy_failed` events to standard output for troubleshooting published dashboard access. When `DEBUG=1` or `AUTH_PROXY_DEBUG=1`, it also logs `request_received` for inbound requests and `proxy_forward` with the resolved upstream URL before forwarding. If the assigned dashboard upstream is temporarily unavailable, the proxy returns HTTP 502 instead of terminating the app.
+The auth proxy logs `auth_attempt`, `auth_success`, `auth_failed`, and `proxy_failed` events to standard output for troubleshooting published dashboard access. The `remote=` field is the real client address taken from Traefik's `X-Forwarded-For` header.
+Form logins are throttled: after 5 failures within 60 seconds for the same client address or the same username, further attempts get HTTP 429 with a `Retry-After` header and an `auth_failed detail=rate_limited` log line, without contacting LDAP. Tune the limits with `AUTH_PROXY_LOGIN_MAX_FAILURES` and `AUTH_PROXY_LOGIN_WINDOW_SECONDS` in `authproxy.env` if needed. When `DEBUG=1` or `AUTH_PROXY_DEBUG=1`, it also logs `request_received` for inbound requests and `proxy_forward` with the resolved upstream URL before forwarding. If the assigned dashboard upstream is temporarily unavailable, the proxy returns HTTP 502 instead of terminating the app.
 
 ## Runtime unit
 
