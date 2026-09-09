@@ -30,6 +30,7 @@ From dashboard, you can setup a Telegram and everything else, but Dashboard is s
 * after changing the configuration from dashboard, the agent service needs to be restarted to apply the new configuration. At the moment it can be done with the /restart command, but the first time you configure a messaging platform you need to restart the service from terminal with `systemctl --user restart hermes@<id>.service` or saving changes from NS8 ui
 * At the moment, saving changes from NS8 UI restart all the agents, but in the future we will implement a smarter logic to restart only the agent that needs it.
 * If the selected NS8 user domain's connection details change outside this module, save the module configuration again from the NS8 UI to regenerate auth runtime files and restart the shared auth service.
+* Agent pods can reach services published on the node loopback (`10.0.2.2` inside the pod). Agents run model-directed tools, so treat them as untrusted workloads; see "Network exposure of agent pods" in `NS8-MODULE.md` before publishing sensitive loopback services on the same node.
 
 
 ## Command line

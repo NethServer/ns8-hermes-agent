@@ -34,6 +34,18 @@ Important module-specific exceptions:
 - No user-domain change event handler is currently shipped. Changes to LDAP relation details are reconciled by running `configure-module` again.
 - No Redis dump/restore action is needed because the canonical restored state is in files and the shared Podman volume.
 
+## Network exposure of agent pods
+
+Agent pods are created with `--network=slirp4netns:allow_host_loopback=true` (`imageroot/systemd/user/hermes-pod@.service`). Inside a pod the address `10.0.2.2` maps to the node loopback, so a Hermes container can reach every service the node publishes on `127.0.0.1`: the NS8 Redis replica, the cluster API server, ldapproxy, and every other module's loopback `TCP_PORT` listener, including this module's own auth proxy. This is what lets an agent deliver mail through a smarthost that runs on the same node.
+
+Hermes agents execute model-directed tools, so a prompt injection can turn this reachability into requests against those services. Reduce the impact with the safeguards already in place (no LDAP credentials in agent env files, per-agent `API_SERVER_KEY`, rootless pods, no published agent ports) and decide per deployment whether host loopback access is required:
+
+- if agents do not need any node-local service, drop `allow_host_loopback=true` from `hermes-pod@.service` in a downstream build;
+- if only SMTP is needed, prefer a smarthost reachable through the cluster network or an external relay so the loopback grant can be removed;
+- keep the shared `TCP_PORT` listener behind Traefik only and never widen it to other interfaces.
+
+Changing the pod network flag is a runtime contract change: update the unit template, `tests/test_runtime_validation.py`, and this document together.
+
 ## Podman compatibility
 
 The current runtime layout requires Podman volume `subpath` support.
