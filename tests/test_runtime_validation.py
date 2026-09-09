@@ -3397,9 +3397,39 @@ class HermesModuleStateTest(unittest.TestCase):
                             "status": "stop",
                             "allowed_user": "alice",
                         }
-                    ]
+                    ],
+                    "roles": list(self.state.ALLOWED_ROLES),
+                    "max_agents": self.state.MAX_AGENTS,
                 },
             )
+
+    def test_validation_constants_match_schemas_and_ui_fallbacks(self):
+        """Roles, the name pattern and the agent limit are defined once in
+        hermes_agent_state; every copy (both JSON schemas and the UI fallback
+        list) must stay identical or the UI can silently drop agents."""
+        import re
+
+        input_schema = json.loads((CONFIGURE_MODULE_ACTION_DIR / "validate-input.json").read_text(encoding="utf-8"))
+        output_schema = json.loads((GET_CONFIGURATION_PATH.parent / "validate-output.json").read_text(encoding="utf-8"))
+        roles = list(self.state.ALLOWED_ROLES)
+
+        for schema_name, schema in (("validate-input.json", input_schema), ("validate-output.json", output_schema)):
+            agent_schema = schema["properties"]["agents"]["items"]["properties"]
+            self.assertEqual(agent_schema["role"]["enum"], roles, schema_name)
+            self.assertEqual(list(agent_schema["status"]["enum"]), list(self.state.ALLOWED_STATUSES), schema_name)
+            self.assertEqual(agent_schema["name"]["pattern"], self.state.NAME_PATTERN.pattern, schema_name)
+            self.assertEqual(agent_schema["id"]["maximum"], self.state.MAX_AGENTS, schema_name)
+
+        self.assertEqual(output_schema["properties"]["roles"]["items"]["enum"], roles)
+        self.assertEqual(output_schema["properties"]["max_agents"]["const"], self.state.MAX_AGENTS)
+
+        settings_vue = (ROOT / "ui" / "src" / "views" / "Settings.vue").read_text(encoding="utf-8")
+        ui_roles_match = re.search(r"roles:\s*\[(.*?)\]", settings_vue, re.DOTALL)
+        self.assertIsNotNone(ui_roles_match, "Settings.vue must keep a roles fallback list")
+        ui_roles = re.findall(r'"([a-z_]+)"', ui_roles_match.group(1))
+        self.assertEqual(ui_roles, roles)
+        self.assertIn(f"maxAgents: {self.state.MAX_AGENTS},", settings_vue)
+        self.assertIn(self.state.NAME_PATTERN.pattern, settings_vue)
 
     def test_get_agent_runtime_reports_actual_runtime_status(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):

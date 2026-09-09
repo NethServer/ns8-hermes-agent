@@ -26,7 +26,7 @@
     "configure_instance": "Configura {instance}",
     "agents_title": "Agenti",
     "agents_description": "Manage configured agents, their role assignments, and their Hermes dashboard access.",
-    "agent_limit_reached": "You can configure up to 30 agents in this module.",
+    "agent_limit_reached": "In questo modulo puoi configurare al massimo {count} agenti.",
     "create_agent": "Crea agente",
     "create_agent_title": "Crea agente",
     "edit_agent": "Edit agent",
@@ -76,7 +76,10 @@
     "actions": "Azioni",
     "no_agents": "Nessun agente configurato",
     "start_agent": "Start",
-    "stop_agent": "Stop"
+    "stop_agent": "Stop",
+    "role_unknown": "Ruolo sconosciuto ({role})",
+    "unknown_role_title": "Ruolo agente non riconosciuto",
+    "unknown_role_blocks_save": "Uno o più agenti usano un ruolo che questa versione dell'interfaccia non conosce. Aggiorna il modulo prima di salvare, altrimenti quegli agenti non potrebbero essere preservati."
   },
   "error": {
     "error": "Errore",

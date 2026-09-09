@@ -227,10 +227,10 @@ api-cli run module/hermes-agent1/get-configuration --data '{}'
 Example output:
 
 ```json
-{"base_virtualhost": "agents.example.org", "user_domain": "example.org", "lets_encrypt": true, "agents": [{"id": 1, "name": "Foo Bar", "role": "developer", "status": "start", "allowed_user": "alice"}]}
+{"base_virtualhost": "agents.example.org", "user_domain": "example.org", "lets_encrypt": true, "agents": [{"id": 1, "name": "Foo Bar", "role": "developer", "status": "start", "allowed_user": "alice"}], "roles": ["default", "developer", "marketing", "sales", "customer_support", "social_media_manager", "business_consultant", "researcher"], "max_agents": 30}
 ```
 
-`status` is the persisted desired state.
+`status` is the persisted desired state. `roles` and `max_agents` expose the validation constants so the UI never hardcodes them.
 
 Read live runtime state with:
 

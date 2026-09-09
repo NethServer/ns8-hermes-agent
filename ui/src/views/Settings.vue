@@ -33,8 +33,17 @@
                     {{ $t("settings.agents_description") }}
                   </p>
                   <p v-if="isAgentLimitReached" class="section-description">
-                    {{ $t("settings.agent_limit_reached") }}
+                    {{
+                      $t("settings.agent_limit_reached", { count: maxAgents })
+                    }}
                   </p>
+                  <NsInlineNotification
+                    v-if="hasUnknownRoles"
+                    kind="warning"
+                    :title="$t('settings.unknown_role_title')"
+                    :description="$t('settings.unknown_role_blocks_save')"
+                    :showCloseButton="false"
+                  />
                 </cv-column>
                 <cv-column :md="2" :max="8" class="toolbar-actions">
                   <NsButton
@@ -540,6 +549,7 @@ export default {
       userDomain: "",
       letsEncrypt: false,
       isLetsEncryptCurrentlyEnabled: false,
+      maxAgents: 30,
       roles: [
         "default",
         "developer",
@@ -625,7 +635,15 @@ export default {
       return this.configureMode === "delete" && !!this.error.configureModule;
     },
     isAgentLimitReached() {
-      return this.agents.length >= 30;
+      return this.agents.length >= this.maxAgents;
+    },
+    unknownRoleAgents() {
+      return this.agents.filter(
+        (agentData) => !this.roles.includes(agentData.role)
+      );
+    },
+    hasUnknownRoles() {
+      return this.unknownRoleAgents.length > 0;
     },
   },
   beforeRouteEnter(to, from, next) {
@@ -685,6 +703,15 @@ export default {
     getConfigurationCompleted(taskContext, taskResult) {
       this.loading.getConfiguration = false;
       const config = taskResult.output;
+
+      // The backend owns the validation constants; the local lists are only
+      // fallbacks for older module versions that did not publish them.
+      if (Array.isArray(config.roles) && config.roles.length) {
+        this.roles = config.roles.slice();
+      }
+      if (Number.isInteger(config.max_agents) && config.max_agents > 0) {
+        this.maxAgents = config.max_agents;
+      }
 
       this.baseVirtualhost = this.normalizeBaseVirtualhost(
         config.base_virtualhost || ""
@@ -793,6 +820,15 @@ export default {
     async saveAgents(nextAgents, mode) {
       this.error.baseVirtualhost = "";
       this.error.userDomain = "";
+      if (this.hasUnknownRoles) {
+        // Saving would resubmit the full agent list and the backend would
+        // reject it; never let a UI/backend version skew alter agents.
+        this.configureMode = mode;
+        this.error.configureModule = this.$t(
+          "settings.unknown_role_blocks_save"
+        );
+        return;
+      }
       if (!this.validateBaseVirtualhost()) {
         this.error.configureModule = this.$t("error.validation_error");
         return;
@@ -850,25 +886,18 @@ export default {
       }
     },
     normalizeAgents(agents) {
+      // Keep every agent the backend reported, even ones this UI build does
+      // not fully understand: filtering here and then saving the filtered list
+      // would delete those agents server-side.
       return agents
         .map((agentData) => {
-          const normalizedAgent = {
+          return {
             id: Number(agentData.id),
             name: (agentData.name || "").trim(),
             role: agentData.role,
             status: agentData.status === "stop" ? "stop" : "start",
             allowed_user: this.normalizeAllowedUser(agentData.allowed_user),
           };
-
-          return normalizedAgent;
-        })
-        .filter((agentData) => {
-          return (
-            Number.isInteger(agentData.id) &&
-            agentData.id >= 1 &&
-            agentData.name &&
-            this.roles.includes(agentData.role)
-          );
         })
         .sort((left, right) => left.id - right.id);
     },
@@ -884,7 +913,7 @@ export default {
       });
     },
     nextAgentId() {
-      for (let candidateId = 1; candidateId <= 30; candidateId++) {
+      for (let candidateId = 1; candidateId <= this.maxAgents; candidateId++) {
         if (!this.agents.some((agentData) => agentData.id === candidateId)) {
           return candidateId;
         }
@@ -1004,7 +1033,11 @@ export default {
       return `https://${normalizedBaseVirtualhost}/hermes-${agentData.id}/`;
     },
     roleLabel(role) {
-      return this.$t(`settings.role_${role}`);
+      const key = `settings.role_${role}`;
+      if (this.roles.includes(role) && this.$te(key)) {
+        return this.$t(key);
+      }
+      return this.$t("settings.role_unknown", { role });
     },
     statusKind(status) {
       return status === "stop" ? "high-contrast" : "green";
