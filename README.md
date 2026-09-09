@@ -319,13 +319,15 @@ Run the Robot Framework integration suite against a disposable NS8 node with:
 ./test-module.sh <NODE_ADDR> ghcr.io/nethserver/hermes-agent:latest
 ```
 
-The checked-in tests cover the pruned contract:
+The Robot suite provisions a throwaway OpenLDAP user domain on the same node and covers the current contract:
 
-- install produces no active agent runtime
+- install produces no active agent runtime and no legacy state files
 - zero agents keeps the module idle
-- one started agent produces one pod, three services, two containers, one auth-proxied route with the configured shared TLS mode, one per-agent subdir inside the shared volume, and one isolated generated file set
-- stopping an agent disables the runtime without deleting its generated files or shared-volume subdir
-- removing an agent cleans the runtime files and its shared-volume subdir
+- one started, unpublished agent produces one pod, two containers, three units, one subdir inside the shared `hermes-agents-home` volume, `agents/1/*` plus `secrets/1.env`, and no LDAP keys in agent files
+- publishing without `allowed_user` fails validation with `agent_allowed_user_required` and leaves the running agent untouched
+- publishing with a user domain creates the `<module_id>-hermes-auth` Traefik route and the auth proxy answers the login form, rejects a wrong password, issues a session on a correct one, and serves `/api/auth/me`
+- stopping an agent disables the runtime, keeps its generated files and volume subdir, and makes login for its user fail
+- removing the last agent cleans its files and volume subdir and removes the shared route and auth service
 - removing the module cleans the instance state
 
 For behavior changes, keep the lifecycle tests aligned with install, configure, route reachability, reconfigure, service reconciliation, uninstall, validation failures, and secret non-disclosure where relevant.
