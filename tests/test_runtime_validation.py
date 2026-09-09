@@ -1571,6 +1571,10 @@ class HermesModuleStateTest(unittest.TestCase):
 
         self.assertIn("Restart=always", service_template)
         self.assertNotIn("Restart=on-failure", service_template)
+        # Boot-time resilience: pre-start hooks depend on Redis/ldapproxy.
+        for template in (service_template, auth_template, socket_template):
+            self.assertIn("StartLimitIntervalSec=0", template)
+            self.assertRegex(template, r"RestartSec=\d+")
         self.assertNotIn("EnvironmentFile=-%S/state/hosts", service_template)
         self.assertNotIn("$PODMAN_ADD_HOST_ARGS", service_template)
         self.assertNotIn("--restart=always", service_template)

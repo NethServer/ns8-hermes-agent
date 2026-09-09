@@ -3,6 +3,7 @@ Description=Hermes dashboard unix socket sidecar %i
 Requires=hermes-pod@%i.service hermes@%i.service
 After=hermes-pod@%i.service hermes@%i.service
 PartOf=hermes@%i.service
+StartLimitIntervalSec=0
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
@@ -10,6 +11,7 @@ EnvironmentFile=-%S/state/environment
 EnvironmentFile=-%S/state/agents/%i/agent.env
 WorkingDirectory=%S/state
 Restart=on-failure
+RestartSec=5
 SuccessExitStatus=143 SIGTERM
 KillMode=mixed
 Type=notify
