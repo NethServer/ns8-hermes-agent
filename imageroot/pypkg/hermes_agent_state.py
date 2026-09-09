@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -19,6 +20,11 @@ HERMES_RUNTIME_HOME = "/opt/data"
 AGENT_DASHBOARD_SOCKETS_DIR = Path("dashboard-sockets")
 AUTHPROXY_SOCKET_MOUNT_DIR = "/sockets"
 AGENT_PUBLIC_ENVFILE = "agent.env"
+# Derived, never backed up: records what each running unit was last started
+# with so configure-module can leave unchanged agents alone.
+RUNTIME_FINGERPRINTS_FILE = Path("runtime-fingerprints.json")
+AGENT_RUNTIME_ENV_KEYS = ("HERMES_AGENT_HERMES_IMAGE", "HERMES_AGENT_SOCKET_IMAGE", "TIMEZONE")
+AUTH_RUNTIME_ENV_KEYS = ("HERMES_AGENT_AUTH_IMAGE", "TCP_PORT", "TIMEZONE")
 SOUL_TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates" / "SOUL"
 MAX_AGENTS = 30
 
@@ -257,3 +263,66 @@ def list_known_agent_ids():
                 record_agent_id(match.group(1))
 
     return sorted(ids)
+
+def _read_text_or_empty(path):
+    file_path = Path(path)
+    try:
+        return file_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def _fingerprint(parts):
+    return hashlib.sha256(json.dumps(parts, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def agent_runtime_fingerprint(agent_id, environment=None):
+    """Hash of everything hermes@<id> and hermes-socket@<id> consume at start."""
+    if environment is None:
+        environment = os.environ
+
+    agent_dir = AGENTS_DIR / str(agent_id)
+    return _fingerprint(
+        {
+            "metadata": _read_text_or_empty(agent_dir / "metadata.json"),
+            "public_env": _read_text_or_empty(agent_dir / AGENT_PUBLIC_ENVFILE),
+            "secrets": _read_text_or_empty(SECRETS_DIR / f"{agent_id}.env"),
+            "environment": {key: environment.get(key, "") for key in AGENT_RUNTIME_ENV_KEYS},
+        }
+    )
+
+
+def auth_runtime_fingerprint(environment=None):
+    """Hash of everything hermes-auth.service consumes at start."""
+    if environment is None:
+        environment = os.environ
+
+    return _fingerprint(
+        {
+            "env": _read_text_or_empty(AUTHPROXY_ENVFILE),
+            "secrets": _read_text_or_empty(AUTHPROXY_SECRETS_ENVFILE),
+            "agents": _read_text_or_empty(AUTHPROXY_AGENTS_FILE),
+            "environment": {key: environment.get(key, "") for key in AUTH_RUNTIME_ENV_KEYS},
+        }
+    )
+
+
+def read_runtime_fingerprints():
+    try:
+        data = read_jsonfile(RUNTIME_FINGERPRINTS_FILE)
+    except (OSError, ValueError):
+        data = None
+
+    if not isinstance(data, dict):
+        return {"agents": {}, "auth": ""}
+
+    agents = data.get("agents")
+    auth = data.get("auth")
+    return {
+        "agents": {str(key): str(value) for key, value in agents.items()} if isinstance(agents, dict) else {},
+        "auth": auth if isinstance(auth, str) else "",
+    }
+
+
+def write_runtime_fingerprints(fingerprints):
+    write_jsonfile(RUNTIME_FINGERPRINTS_FILE, fingerprints)

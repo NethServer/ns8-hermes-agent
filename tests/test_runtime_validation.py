@@ -48,6 +48,7 @@ STATE_INCLUDE_PATH = ROOT / "imageroot" / "etc" / "state-include.conf"
 UPDATE_OWNERSHIP_SCRIPT_PATH = UPDATE_MODULE_SCRIPT_DIR / "30ensure-agent-home-ownership"
 UPDATE_RESTART_SCRIPT_PATH = UPDATE_MODULE_SCRIPT_DIR / "80restart"
 RECONCILE_DESIRED_ROUTES_PATH = CONFIGURE_MODULE_ACTION_DIR / "90reconcile-desired-routes"
+RECONCILE_AGENT_SERVICES_PATH = CONFIGURE_MODULE_ACTION_DIR / "95reconcile-agent-services"
 DESTROY_REMOVE_ROUTES_PATH = DESTROY_MODULE_ACTION_DIR / "10remove-routes"
 GET_CONFIGURATION_PATH = ROOT / "imageroot" / "actions" / "get-configuration" / "20read"
 GET_AGENT_RUNTIME_PATH = ROOT / "imageroot" / "actions" / "get-agent-runtime" / "10read"
@@ -2746,6 +2747,88 @@ class HermesModuleStateTest(unittest.TestCase):
                 sys.modules["agent.tasks"] = original_agent_tasks
             elif "agent.tasks" in sys.modules:
                 del sys.modules["agent.tasks"]
+
+    def run_reconcile_agent_services(self, active_units=None):
+        """Run step 95 once; returns the list of executed commands."""
+        active_units = set(active_units or [])
+        commands = []
+
+        def run_side_effect(command, **kwargs):
+            commands.append(command)
+            if command[:4] == ["systemctl", "--user", "is-active", "--quiet"]:
+                return types.SimpleNamespace(returncode=0 if command[4] in active_units else 3)
+            return types.SimpleNamespace(returncode=0)
+
+        with stubbed_agent_module(unset_env=mock.Mock()), mock.patch("subprocess.run", side_effect=run_side_effect), mock.patch(
+            "sys.stdin", io.StringIO("{}")
+        ):
+            runpy.run_path(str(RECONCILE_AGENT_SERVICES_PATH), run_name="__main__")
+
+        return commands
+
+    def test_reconcile_agent_services_restarts_only_changed_or_inactive_agents(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch.dict(
+            os.environ,
+            {"MODULE_ID": "hermes-agent1", "BASE_VIRTUALHOST": "agents.example.org", "TCP_PORT": "20001", "HERMES_AGENT_HERMES_IMAGE": "img:1"},
+            clear=True,
+        ):
+            for agent_id, agent_name, allowed_user in ((1, "Agent One", "alice"), (2, "Agent Two", "bob")):
+                self.state.write_jsonfile(
+                    Path("agents") / str(agent_id) / "metadata.json",
+                    {"id": agent_id, "name": agent_name, "role": "default", "status": "start", "allowed_user": allowed_user},
+                )
+                write_envfile(Path("agents") / str(agent_id) / "agent.env", {"AGENT_ID": str(agent_id)})
+                write_envfile(self.state.SECRETS_DIR / f"{agent_id}.env", {"API_SERVER_KEY": f"key{agent_id}"})
+            write_envfile(Path("authproxy.env"), {"USER_DOMAIN": "example.org"})
+            write_envfile(Path("authproxy_secrets.env"), {"HERMES_AUTH_SESSION_SECRET": "s"})
+            self.state.write_jsonfile(Path("authproxy_agents.json"), {"agents": []})
+
+            all_units = {"hermes@1.service", "hermes-socket@1.service", "hermes@2.service", "hermes-socket@2.service", "hermes-auth.service"}
+
+            # First run: nothing recorded yet, everything is (re)started.
+            first = self.run_reconcile_agent_services(active_units=all_units)
+            self.assertIn(["systemctl", "--user", "start", "hermes@1.service"], first)
+            self.assertIn(["systemctl", "--user", "start", "hermes@2.service"], first)
+            self.assertIn(["systemctl", "--user", "start", "hermes-auth.service"], first)
+            fingerprints = self.state.read_jsonfile(self.state.RUNTIME_FINGERPRINTS_FILE)
+            self.assertEqual(set(fingerprints["agents"]), {"1", "2"})
+            self.assertTrue(fingerprints["auth"])
+
+            # Second run with identical inputs and everything active: no restarts.
+            second = self.run_reconcile_agent_services(active_units=all_units)
+            self.assertNotIn(["systemctl", "--user", "stop", "hermes@1.service"], second)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes@1.service"], second)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes@2.service"], second)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes-auth.service"], second)
+            self.assertIn(["systemctl", "--user", "enable", "hermes@1.service"], second)
+
+            # Agent 2 changed its generated env: only agent 2 is bounced.
+            write_envfile(Path("agents") / "2" / "agent.env", {"AGENT_ID": "2", "AGENT_NAME": "Renamed"})
+            third = self.run_reconcile_agent_services(active_units=all_units)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes@1.service"], third)
+            self.assertIn(["systemctl", "--user", "stop", "hermes@2.service"], third)
+            self.assertIn(["systemctl", "--user", "start", "hermes@2.service"], third)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes-auth.service"], third)
+
+            # Unchanged but not running (e.g. crashed unit): started again.
+            fourth = self.run_reconcile_agent_services(active_units=all_units - {"hermes@1.service"})
+            self.assertIn(["systemctl", "--user", "start", "hermes@1.service"], fourth)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes@2.service"], fourth)
+
+            # Auth proxy inputs changed: only hermes-auth restarts.
+            self.state.write_jsonfile(Path("authproxy_agents.json"), {"agents": [{"id": 1}]})
+            fifth = self.run_reconcile_agent_services(active_units=all_units)
+            self.assertIn(["systemctl", "--user", "start", "hermes-auth.service"], fifth)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes@1.service"], fifth)
+
+            # Stopping agent 1 drops its fingerprint and tears the runtime down.
+            self.state.write_jsonfile(
+                Path("agents") / "1" / "metadata.json",
+                {"id": 1, "name": "Agent One", "role": "default", "status": "stop", "allowed_user": "alice"},
+            )
+            sixth = self.run_reconcile_agent_services(active_units=all_units)
+            self.assertIn(["systemctl", "--user", "disable", "--now", "hermes@1.service"], sixth)
+            self.assertEqual(set(self.state.read_jsonfile(self.state.RUNTIME_FINGERPRINTS_FILE)["agents"]), {"2"})
 
     def test_configure_module_sets_traefik_routes_for_dashboard(self):
         original_agent = sys.modules.get("agent")

@@ -28,7 +28,7 @@ From dashboard, you can setup a Telegram and everything else, but Dashboard is s
 * the current shared-volume runtime relies on Podman volume `subpath` mounts for both first-time seeding and the live `hermes@<id>` service. Older Podman releases without `subpath` support are not supported. In practice, Debian 12's stock Podman 4.3.x is too old and agent creation will fail with `subpath: invalid mount option`.
 * the Dashboard Web UI is bundled into the Hermes wrapper image at build time. After the agent service starts, availability depends on the Hermes runtime booting, not on a fresh dashboard rebuild.
 * after changing the configuration from dashboard, the agent service needs to be restarted to apply the new configuration. At the moment it can be done with the /restart command, but the first time you configure a messaging platform you need to restart the service from terminal with `systemctl --user restart hermes@<id>.service` or saving changes from NS8 ui
-* At the moment, saving changes from NS8 UI restart all the agents, but in the future we will implement a smarter logic to restart only the agent that needs it.
+* Saving changes from the NS8 UI restarts only the agents whose generated runtime inputs changed (metadata, `agent.env`, `secrets/<id>.env`, images, timezone) or that are not running, plus the shared auth service when its own inputs changed. Unchanged running agents keep their sessions.
 * If the selected NS8 user domain's connection details change outside this module, save the module configuration again from the NS8 UI to regenerate auth runtime files and restart the shared auth service.
 * Agent pods can reach services published on the node loopback (`10.0.2.2` inside the pod). Agents run model-directed tools, so treat them as untrusted workloads; see "Network exposure of agent pods" in `NS8-MODULE.md` before publishing sensitive loopback services on the same node.
 
@@ -117,6 +117,7 @@ Module-wide files:
 - `authproxy_secrets.env`
 - `authproxy_agents.json`
 - `dashboard-sockets/`
+- `runtime-fingerprints.json`: hashes of the inputs each running unit was last started with; derived, not backed up, used by `configure-module` to skip restarts of unchanged agents
 
 `environment` contains non-secret module state. Secret values belong in `secrets/shared.env`, per-agent `secrets/<id>.env`, or generated auth proxy secret files, and should not appear in task output or logs.
 

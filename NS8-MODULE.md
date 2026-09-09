@@ -247,7 +247,7 @@ Seeding is strict first-write only: later agent edits preserve existing `SOUL.md
 - `75seed-agent-home`: runs a one-shot Hermes container to seed first-time `/opt/data/SOUL.md` and `/opt/data/.env` content from checked-in templates
 - `80reload-systemd`: reloads the user systemd manager
 - `90reconcile-desired-routes`: creates, updates, or clears the shared Traefik route instance `<module>-hermes-auth` when `base_virtualhost` is configured or explicitly changed, including `lets_encrypt` cleanup for host changes or shared TLS disable events
-- `95reconcile-agent-services`: enables and starts both `hermes@<id>.service` and `hermes-socket@<id>.service` for desired `start` agents, disables or stops the rest, and manages the shared `hermes-auth.service` when publishing is active
+- `95reconcile-agent-services`: enables both `hermes@<id>.service` and `hermes-socket@<id>.service` for desired `start` agents and (re)starts them only when their fingerprinted inputs changed since the last run or the units are inactive, disables or stops the rest, and applies the same change-detection to the shared `hermes-auth.service` when publishing is active; fingerprints live in `runtime-fingerprints.json`
 
 ### `list-user-domains`
 

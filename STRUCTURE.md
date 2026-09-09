@@ -37,6 +37,7 @@ There is no `state-exclude.conf` because the current backup scope is explicit an
 - `state/agents/<id>/metadata.json`: canonical per-agent desired configuration.
 - `state/agents/<id>/agent.env`: generated per-agent public runtime environment.
 - `state/authproxy.env`, `state/authproxy_secrets.env`, `state/authproxy_agents.json`, and `state/dashboard-sockets/`: generated shared auth runtime files that are intentionally regenerated rather than backed up.
+- `state/runtime-fingerprints.json`: hashes of the generated inputs each agent unit and the auth service were last started with; derived, not backed up, so a restore restarts everything.
 - `volumes/hermes-agents-home`: shared Podman volume with one Hermes home subdir per agent.
 
 ### `imageroot/actions/`
@@ -57,7 +58,7 @@ Action directories contain numbered executable steps plus JSON schemas for publi
 - `configure-module/75seed-agent-home`: runs a one-shot Hermes container to seed strict first-write-only `SOUL.md` and `.env` content into the agent's subdir inside the shared `hermes-agents-home` volume from checked-in templates.
 - `configure-module/80reload-systemd`: reloads the user systemd manager.
 - `configure-module/90reconcile-desired-routes`: creates, updates, or deletes the shared Traefik auth route for the desired configuration.
-- `configure-module/95reconcile-agent-services`: enables, starts, stops, or disables `hermes@<id>.service` and `hermes-socket@<id>.service` to match desired state.
+- `configure-module/95reconcile-agent-services`: enables, starts, stops, or disables `hermes@<id>.service` and `hermes-socket@<id>.service` to match desired state, restarting only agents whose fingerprinted inputs changed or that are not active, and applies the same rule to `hermes-auth.service`.
 - `configure-module/validate-input.json`: input schema for the shared `base_virtualhost`, optional `user_domain`, shared `lets_encrypt`, and the Hermes `agents` payload including `allowed_user`.
 - `get-configuration/20read`: returns the shared dashboard virtualhost, shared `user_domain`, shared `lets_encrypt` setting, and configured agents with desired persisted status plus `allowed_user`.
 - `get-configuration/validate-output.json`: output schema for the shared dashboard virtualhost, shared `user_domain`, shared `lets_encrypt` flag, and the Hermes `agents` response.
