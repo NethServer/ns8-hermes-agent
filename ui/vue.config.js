@@ -3,7 +3,13 @@ module.exports = {
     loaderOptions: {
       sass: {
         sassOptions: {
-          silenceDeprecations: ["import", "global-builtin", "color-functions", "if-function", "legacy-js-api"],
+          silenceDeprecations: [
+            "import",
+            "global-builtin",
+            "color-functions",
+            "if-function",
+            "legacy-js-api",
+          ],
         },
       },
     },

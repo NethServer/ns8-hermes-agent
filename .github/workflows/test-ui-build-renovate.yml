@@ -14,6 +14,11 @@ jobs:
 
     env:
       NODE_OPTIONS: --openssl-legacy-provider
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
+    defaults:
+      run:
+        working-directory: ui
 
     steps:
       - name: Checkout code
@@ -26,22 +31,18 @@ jobs:
           cache: "yarn"
           cache-dependency-path: "ui/yarn.lock"
 
-      - name: Set Yarn to v1 Classic
-        run: yarn set version classic
-        working-directory: ./ui
+      # The lockfile is Yarn Berry (v4); the version is pinned by the
+      # "packageManager" field in ui/package.json and activated by Corepack.
+      - name: Enable Corepack
+        run: corepack enable
 
-      - name: Check Node Version
-        run: node --version
-        working-directory: ./ui
-
-      - name: Check Yarn Version
-        run: yarn --version
-        working-directory: ./ui
+      - name: Check Node and Yarn versions
+        run: |
+          node --version
+          yarn --version
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
-        working-directory: ./ui
+        run: yarn install --immutable
 
       - name: Build application
         run: yarn build
-        working-directory: ./ui

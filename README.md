@@ -304,7 +304,15 @@ If required by your environment, set `NODE_OPTIONS=--openssl-legacy-provider` be
 
 ## Testing
 
-Run the module test with:
+Unit tests need only the Python standard library and run in well under a second:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+The `Test` GitHub Actions workflow runs them on every push to `main` and every pull request, together with the UI lint and production build. Keep that workflow green before merging.
+
+Run the Robot Framework integration suite against a disposable NS8 node with:
 
 ```bash
 ./test-module.sh <NODE_ADDR> ghcr.io/nethserver/hermes-agent:latest
