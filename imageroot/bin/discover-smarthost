@@ -5,37 +5,59 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
-import agent
 import os
+import sys
+from pathlib import Path
 
-SECRETS_ENVFILE = "secrets.env"
+import agent
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
+
+from hermes_agent_state import (
+    SECRETS_DIR,
+    SHARED_SECRETS_ENVFILE,
+    SMTP_SECRET_KEY,
+    ensure_private_directory,
+)
 
 
 def read_optional_envfile(path):
     if not os.path.exists(path):
         return {}
 
-    return agent.read_envfile(path)
+    return agent.read_envfile(str(path))
 
 
-# Connect the local Redis replica. This is necessary to consistently start
-# the service if the leader node is not reachable:
-rdb = agent.redis_connect(use_replica=True)
-smtp_settings = agent.get_smarthost_settings(rdb)
+def main():
+    # Connect the local Redis replica. This is necessary to consistently start
+    # the service if the leader node is not reachable:
+    rdb = agent.redis_connect(use_replica=True)
+    smtp_settings = agent.get_smarthost_settings(rdb)
 
-agent.mset_env(
-    {
-        "SMTP_ENABLED": "1" if smtp_settings["enabled"] else "",
-        "SMTP_HOST": smtp_settings["host"],
-        "SMTP_PORT": smtp_settings["port"],
-        "SMTP_USERNAME": smtp_settings["username"],
-        "SMTP_ENCRYPTION": smtp_settings["encrypt_smtp"],
-        "SMTP_TLSVERIFY": "1" if smtp_settings["tls_verify"] else "",
-    },
-)
-secrets_env = read_optional_envfile(SECRETS_ENVFILE)
-secrets_env["SMTP_PASSWORD"] = smtp_settings["password"]
-agent.write_envfile(SECRETS_ENVFILE, secrets_env)
+    # Public SMTP settings are merged into the shared environment file.
+    agent.mset_env(
+        {
+            "SMTP_ENABLED": "1" if smtp_settings["enabled"] else "",
+            "SMTP_HOST": smtp_settings["host"],
+            "SMTP_PORT": smtp_settings["port"],
+            "SMTP_USERNAME": smtp_settings["username"],
+            "SMTP_ENCRYPTION": smtp_settings["encrypt_smtp"],
+            "SMTP_TLSVERIFY": "1" if smtp_settings["tls_verify"] else "",
+        },
+    )
 
-# NOTE: Public SMTP settings are merged into the shared environment file,
-#       while secrets are written to secrets.env for Podman `--env-file`.
+    # The password is merged into the module-wide secrets file, which is the
+    # only source sync-agent-runtime projects into each per-agent secrets file.
+    # Never replace the whole file: it also holds the shared auth session secret.
+    ensure_private_directory(SECRETS_DIR)
+    shared_secrets = read_optional_envfile(SHARED_SECRETS_ENVFILE)
+    smtp_password = smtp_settings.get("password") or ""
+    if smtp_password:
+        shared_secrets[SMTP_SECRET_KEY] = smtp_password
+    else:
+        shared_secrets.pop(SMTP_SECRET_KEY, None)
+    agent.write_envfile(str(SHARED_SECRETS_ENVFILE), shared_secrets)
+
+
+if __name__ == "__main__":
+    main()

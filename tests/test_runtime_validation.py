@@ -38,6 +38,8 @@ CONFIGURE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "configure-module
 DESTROY_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "destroy-module"
 RESTORE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "restore-module"
 UPDATE_MODULE_SCRIPT_DIR = ROOT / "imageroot" / "update-module.d"
+DISCOVER_SMARTHOST_PATH = ROOT / "imageroot" / "bin" / "discover-smarthost"
+MIGRATE_SECRETS_DIR_SCRIPT_PATH = UPDATE_MODULE_SCRIPT_DIR / "20migrate-secrets-dir"
 PERSIST_SHARED_ENV_PATH = CONFIGURE_MODULE_ACTION_DIR / "20persist-shared-env"
 SEED_AGENT_HOME_ACTION_PATH = CONFIGURE_MODULE_ACTION_DIR / "75seed-agent-home"
 RESTORE_COPY_ENV_PATH = RESTORE_MODULE_ACTION_DIR / "06copyenv"
@@ -202,6 +204,36 @@ def emulate_sync_agent_runtime(sync_module, command):
         sync_module.sync_agent_runtime_files(agent_id=agent_id)
 
     return types.SimpleNamespace(returncode=0)
+
+
+@contextmanager
+def stubbed_agent_module(**attributes):
+    """Install a throwaway ``agent`` module (the NS8 core helper) for one test."""
+    original_agent = sys.modules.get("agent")
+    agent_stub = types.ModuleType("agent")
+    for name, value in attributes.items():
+        setattr(agent_stub, name, value)
+    sys.modules["agent"] = agent_stub
+    try:
+        yield agent_stub
+    finally:
+        if original_agent is not None:
+            sys.modules["agent"] = original_agent
+        else:
+            sys.modules.pop("agent", None)
+
+
+def run_script(path, argv=None):
+    original_argv = sys.argv[:]
+    sys.argv[:] = [str(path), *(argv or [])]
+    try:
+        try:
+            runpy.run_path(str(path), run_name="__main__")
+        except SystemExit as exit_error:
+            if exit_error.code not in (0, None):
+                raise
+    finally:
+        sys.argv[:] = original_argv
 
 
 @contextmanager
@@ -1621,6 +1653,72 @@ class HermesModuleStateTest(unittest.TestCase):
                 ],
             )
             self.assertNotIn("hermes-agent@", command_log_path.read_text(encoding="utf-8"))
+
+    def test_discover_smarthost_merges_password_into_shared_secrets(self):
+        smarthost = {
+            "enabled": True,
+            "host": "smtp.example.org",
+            "port": 587,
+            "username": "mailer",
+            "password": "smtp-secret",
+            "encrypt_smtp": "starttls",
+            "tls_verify": True,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), stubbed_agent_module(
+            redis_connect=mock.Mock(return_value="rdb"),
+            get_smarthost_settings=mock.Mock(return_value=smarthost),
+            mset_env=mock.Mock(),
+            read_envfile=read_envfile,
+            write_envfile=write_envfile,
+        ) as agent_stub:
+            write_envfile(self.state.SHARED_SECRETS_ENVFILE, {"HERMES_AUTH_SESSION_SECRET": "session"})
+
+            run_script(DISCOVER_SMARTHOST_PATH)
+
+            shared_secrets = read_envfile(self.state.SHARED_SECRETS_ENVFILE)
+            self.assertEqual(shared_secrets["SMTP_PASSWORD"], "smtp-secret")
+            self.assertEqual(shared_secrets["HERMES_AUTH_SESSION_SECRET"], "session")
+            self.assertFalse(Path("secrets.env").exists(), "legacy secrets.env must not be written")
+            self.assertEqual(oct(self.state.SECRETS_DIR.stat().st_mode & 0o777), "0o700")
+            agent_stub.redis_connect.assert_called_once_with(use_replica=True)
+            agent_stub.mset_env.assert_called_once_with(
+                {
+                    "SMTP_ENABLED": "1",
+                    "SMTP_HOST": "smtp.example.org",
+                    "SMTP_PORT": 587,
+                    "SMTP_USERNAME": "mailer",
+                    "SMTP_ENCRYPTION": "starttls",
+                    "SMTP_TLSVERIFY": "1",
+                }
+            )
+
+            # A cleared smarthost password must not linger in the secrets file.
+            smarthost["password"] = ""
+            run_script(DISCOVER_SMARTHOST_PATH)
+            shared_secrets = read_envfile(self.state.SHARED_SECRETS_ENVFILE)
+            self.assertNotIn("SMTP_PASSWORD", shared_secrets)
+            self.assertEqual(shared_secrets["HERMES_AUTH_SESSION_SECRET"], "session")
+
+    def test_migrate_secrets_dir_merges_legacy_shared_secrets(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), stubbed_agent_module(
+            read_envfile=read_envfile,
+            write_envfile=write_envfile,
+        ):
+            write_envfile(Path("secrets.env"), {"SMTP_PASSWORD": "fresh-pass"})
+            write_envfile(self.state.SHARED_SECRETS_ENVFILE, {"HERMES_AUTH_SESSION_SECRET": "session", "SMTP_PASSWORD": "stale"})
+            write_envfile(Path("agent_3_secrets.env"), {"HERMES_AGENT_SECRET": "three"})
+
+            run_script(MIGRATE_SECRETS_DIR_SCRIPT_PATH)
+
+            shared_secrets = read_envfile(self.state.SHARED_SECRETS_ENVFILE)
+            self.assertEqual(shared_secrets, {"HERMES_AUTH_SESSION_SECRET": "session", "SMTP_PASSWORD": "fresh-pass"})
+            self.assertFalse(Path("secrets.env").exists())
+            self.assertEqual(read_envfile(self.state.SECRETS_DIR / "3.env"), {"HERMES_AGENT_SECRET": "three"})
+            self.assertFalse(Path("agent_3_secrets.env").exists())
+
+            # Re-running with nothing left to migrate is a no-op.
+            run_script(MIGRATE_SECRETS_DIR_SCRIPT_PATH)
+            self.assertEqual(read_envfile(self.state.SHARED_SECRETS_ENVFILE), shared_secrets)
 
     def test_write_private_textfile_rejects_symlink_target(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
