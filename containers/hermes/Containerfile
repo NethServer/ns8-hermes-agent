@@ -18,12 +18,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-google-auth-oauthlib \
     vim
 
+# Every runtime dependency is pinned so the same tag rebuilds the same image.
 RUN pip install --no-cache-dir --break-system-packages \
-    ddgs \
+    ddgs==9.16.0 \
     edge-tts==7.2.7 \
     lark-oapi==1.5.3 \
-    pytesseract \
-    pdf2image \
+    pytesseract==0.3.13 \
+    pdf2image==1.17.0 \
     qrcode==7.4.2
 
 RUN cd /opt/hermes && npx agent-browser install --with-deps
@@ -34,7 +35,7 @@ RUN install -Dm0644 /tmp/favicon.ico /opt/hermes/hermes_cli/web_dist/favicon.ico
     && install -Dm0644 /tmp/favicon.ico /opt/hermes/web/public/favicon.ico \
     && install -Dm0644 /tmp/favicon.ico /opt/hermes/website/static/img/favicon.ico \
     && rm -f /tmp/favicon.ico
-RUN cd && npm install -g @qwen-code/qwen-code@latest
+RUN cd && npm install -g @qwen-code/qwen-code@0.23.2
 
 RUN apt-get clean autoclean && apt-get autoremove --yes && rm -rf /var/lib/{apt,dpkg,cache,log}/* && touch /var/lib/dpkg/status
 

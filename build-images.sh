@@ -60,7 +60,7 @@ buildah run \
     sh -c "corepack enable && yarn install && yarn build"
 
 build_component_image "hermes-agent-auth" "containers/auth"
-build_component_image "hermes-agent-hermes" "." "containers/hermes/Containerfile"
+build_component_image "hermes-agent-hermes" "containers/hermes"
 build_component_image "hermes-agent-socket" "containers/socket"
 
 # Add imageroot directory to the container image

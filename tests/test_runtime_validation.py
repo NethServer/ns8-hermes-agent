@@ -1698,6 +1698,17 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("edge-tts==7.2.7", containerfile)
         self.assertIn("lark-oapi==1.5.3", containerfile)
         self.assertIn("qrcode==7.4.2", containerfile)
+        # Reproducible builds: no floating pip or npm versions.
+        for line in containerfile.splitlines():
+            stripped = line.strip().rstrip("\\").strip()
+            if stripped.startswith("RUN pip install") or stripped.startswith("npm install -g") or "@latest" in stripped:
+                self.assertNotIn("@latest", stripped, line)
+        pip_block = containerfile.split("RUN pip install", 1)[1].split("\n\n", 1)[0]
+        for package in pip_block.replace("\\", " ").split():
+            if package.startswith("-") or package in {"--no-cache-dir", "--break-system-packages"}:
+                continue
+            self.assertRegex(package, r"^[A-Za-z0-9_.-]+==[0-9][A-Za-z0-9_.]*$", f"unpinned pip package: {package}")
+        self.assertIn("npm install -g @qwen-code/qwen-code@0.23.2", containerfile)
         self.assertNotIn("COPY containers/hermes/entrypoint.sh /entrypoint.sh", containerfile)
         self.assertNotIn('ENTRYPOINT [ "/entrypoint.sh" ]', containerfile)
         self.assertNotIn("USER hermes", containerfile)
@@ -1711,12 +1722,16 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertNotIn("COPY patch_dashboard_source.py /opt/hermes/patch_dashboard_source.py", containerfile)
         self.assertNotIn("ns8-web-dist", containerfile)
 
-    def test_build_images_script_builds_hermes_from_repo_root_context(self):
+    def test_build_images_script_builds_hermes_from_its_own_context(self):
         build_script = BUILD_IMAGES_PATH.read_text(encoding="utf-8")
 
         self.assertIn('local containerfile_path="${3:-${context_dir}/Containerfile}"', build_script)
         self.assertIn('--file "${containerfile_path}"', build_script)
-        self.assertIn('build_component_image "hermes-agent-hermes" "." "containers/hermes/Containerfile"', build_script)
+        # Never use the repository root as build context: it drags .git and
+        # ui/node_modules into every buildah invocation.
+        self.assertIn('build_component_image "hermes-agent-hermes" "containers/hermes"', build_script)
+        self.assertNotIn('build_component_image "hermes-agent-hermes" "."', build_script)
+        self.assertTrue((HERMES_CONTAINERFILE_PATH.parent / "favicon.ico").is_file())
 
     def test_auth_containerfile_installs_proxy_runtime(self):
         containerfile = AUTH_CONTAINERFILE_PATH.read_text(encoding="utf-8")
