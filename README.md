@@ -303,7 +303,7 @@ yarn install
 yarn build
 ```
 
-If required by your environment, set `NODE_OPTIONS=--openssl-legacy-provider` before running the UI toolchain.
+The UI builds with Vue CLI 5 (webpack 5) on current Node LTS releases; no `NODE_OPTIONS` workaround is needed. Run the UI unit tests with `yarn test:unit`.
 
 ## Testing
 

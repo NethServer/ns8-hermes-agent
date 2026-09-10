@@ -126,7 +126,7 @@ The user units own long-running container lifecycle through `systemctl --user`, 
 
 ## `ui/`
 
-The embedded admin UI uses Vue 2 and Vue CLI.
+The embedded admin UI uses Vue 2.7 on Vue CLI 5 (webpack 5), ESLint 8 and Prettier 3; it builds on current Node LTS without the OpenSSL legacy provider.
 
 - `AGENTS.md`: local UI instructions.
 - `public/metadata.json`: module metadata used by the UI shell.
@@ -135,6 +135,8 @@ The embedded admin UI uses Vue 2 and Vue CLI.
 - `src/store/index.js`: embedded module context store.
 - `src/views/Settings.vue`: shared dashboard virtualhost, shared `user_domain`, shared `lets_encrypt`, per-agent `allowed_user`, the agent list, the delete modal, start/stop state management, and the task calls; delegates the create/edit form to `AgentFormModal` and all pure logic to `src/lib/agents.js`.
 - `src/components/AgentFormModal.vue`: single create/edit agent modal driven by `v-model` and an `errors` object from the parent.
+- `src/shims/crypto.js`: browser stand-in for the Node `crypto` module (only `randomBytes`, used by the uuid code bundled in `@nethserver/ns8-ui-lib`), aliased from `vue.config.js` because webpack 5 ships no Node polyfills.
+- `vue.config.js`: Vue CLI 5 configuration: image assets always emitted as files (module logo), the `crypto` alias, and the export-presence warning suppression explained inline.
 - `src/lib/agents.js`: framework-free helpers (agent normalization, validation mirroring `configure-module`, id allocation, `validation-failed` mapping, domain and user helpers) with the fallback validation constants.
 - `tests/unit/agents.spec.js` and `jest.config.js`: Jest unit tests for `src/lib/agents.js`, run with `yarn test:unit`.
 

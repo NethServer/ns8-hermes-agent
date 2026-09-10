@@ -128,7 +128,7 @@ export default {
     userLabel(userRecord) {
       return domainUserLabel(
         userRecord,
-        this.$t("settings.allowed_user_locked_suffix")
+        this.$t("settings.allowed_user_locked_suffix"),
       );
     },
     focusFirstInvalid() {

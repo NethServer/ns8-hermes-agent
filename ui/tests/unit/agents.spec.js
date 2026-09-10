@@ -83,7 +83,7 @@ describe("validateAgentForm", () => {
   test("accepts a valid form", () => {
     const errors = validateAgentForm(
       { name: "Bob Builder", role: "sales", allowed_user: "bob" },
-      context
+      context,
     );
     expect(errors).toEqual({
       name: "",
@@ -97,20 +97,20 @@ describe("validateAgentForm", () => {
     expect(
       validateAgentForm(
         { name: "  ", role: "sales", allowed_user: "bob" },
-        context
-      ).name
+        context,
+      ).name,
     ).toBe("required");
     expect(
       validateAgentForm(
         { name: "Jörg", role: "sales", allowed_user: "bob" },
-        context
-      ).name
+        context,
+      ).name,
     ).toBe("agent_name_invalid");
     expect(
       validateAgentForm(
         { name: "Agent 2", role: "sales", allowed_user: "bob" },
-        context
-      ).name
+        context,
+      ).name,
     ).toBe("agent_name_invalid");
   });
 
@@ -118,8 +118,8 @@ describe("validateAgentForm", () => {
     expect(
       validateAgentForm(
         { name: "Bob", role: "nope", allowed_user: "bob" },
-        context
-      ).role
+        context,
+      ).role,
     ).toBe("agent_role_invalid");
   });
 
@@ -127,32 +127,32 @@ describe("validateAgentForm", () => {
     expect(
       validateAgentForm(
         { name: "Bob", role: "sales", allowed_user: "" },
-        { ...context, userDomain: "" }
-      ).userDomain
+        { ...context, userDomain: "" },
+      ).userDomain,
     ).toBe("user_domain_required");
     expect(
       validateAgentForm(
         { name: "Bob", role: "sales", allowed_user: "" },
-        context
-      ).allowedUser
+        context,
+      ).allowedUser,
     ).toBe("allowed_user_required");
     expect(
       validateAgentForm(
         { name: "Bob", role: "sales", allowed_user: "alice" },
-        context
-      ).allowedUser
+        context,
+      ).allowedUser,
     ).toBe("allowed_user_duplicated");
     // Editing alice herself may keep her own user.
     expect(
       validateAgentForm(
         { name: "Alice", role: "sales", allowed_user: "alice" },
-        { ...context, excludedAgentId: 1 }
-      ).allowedUser
+        { ...context, excludedAgentId: 1 },
+      ).allowedUser,
     ).toBe("");
     // Not publishing: allowed_user is optional and duplicates are tolerated.
     const unpublished = validateAgentForm(
       { name: "Bob", role: "sales", allowed_user: "alice" },
-      { ...context, publishing: false, userDomain: "" }
+      { ...context, publishing: false, userDomain: "" },
     );
     expect(unpublished.allowedUser).toBe("");
     expect(unpublished.userDomain).toBe("");
@@ -205,7 +205,7 @@ describe("mapValidationErrors", () => {
   test("tolerates records without a field", () => {
     expect(
       mapValidationErrors([{ parameter: "(root)", error: "invalid_request" }])
-        .form.name
+        .form.name,
     ).toBe("");
     expect(mapValidationErrors(undefined).baseVirtualhost).toBe("");
   });
@@ -254,7 +254,7 @@ describe("agentDashboardUrl", () => {
   test("builds the per-agent status URL only when publishing", () => {
     expect(agentDashboardUrl("", alice)).toBe("");
     expect(agentDashboardUrl(" Agents.Example.ORG ", alice)).toBe(
-      "https://agents.example.org/hermes-1/"
+      "https://agents.example.org/hermes-1/",
     );
   });
 });

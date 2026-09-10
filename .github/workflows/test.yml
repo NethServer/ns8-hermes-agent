@@ -34,7 +34,6 @@ jobs:
     name: UI lint and build
     runs-on: ubuntu-latest
     env:
-      NODE_OPTIONS: --openssl-legacy-provider
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
     defaults:
       run:

@@ -144,7 +144,7 @@
                     "
                     :description="
                       $t(
-                        'settings.request_le_certificates_disabled_warning_description'
+                        'settings.request_le_certificates_disabled_warning_description',
                       )
                     "
                     :showCloseButton="false"
@@ -543,11 +543,11 @@ export default {
 
       this.core.$root.$once(
         `${taskAction}-aborted-${eventId}`,
-        this.getConfigurationAborted
+        this.getConfigurationAborted,
       );
       this.core.$root.$once(
         `${taskAction}-completed-${eventId}`,
-        this.getConfigurationCompleted
+        this.getConfigurationCompleted,
       );
 
       const res = await to(
@@ -558,7 +558,7 @@ export default {
             isNotificationHidden: true,
             eventId,
           },
-        })
+        }),
       );
       const err = res[0];
 
@@ -637,7 +637,7 @@ export default {
         // Saving resubmits the full agent list and the backend would reject
         // it; never let a UI/backend version skew alter agents.
         this.error.configureModule = this.$t(
-          "settings.unknown_role_blocks_save"
+          "settings.unknown_role_blocks_save",
         );
         return;
       }
@@ -656,15 +656,15 @@ export default {
 
       this.core.$root.$once(
         `${taskAction}-aborted-${eventId}`,
-        this.configureModuleAborted
+        this.configureModuleAborted,
       );
       this.core.$root.$once(
         `${taskAction}-validation-failed-${eventId}`,
-        this.configureModuleValidationFailed
+        this.configureModuleValidationFailed,
       );
       this.core.$root.$once(
         `${taskAction}-completed-${eventId}`,
-        this.configureModuleCompleted
+        this.configureModuleCompleted,
       );
 
       const res = await to(
@@ -683,7 +683,7 @@ export default {
             description: this.$t("common.processing"),
             eventId,
           },
-        })
+        }),
       );
       const err = res[0];
 
@@ -805,7 +805,7 @@ export default {
                 role: this.agentForm.role,
                 allowed_user: allowedUser,
               }
-            : agentData
+            : agentData,
         );
         this.saveAgents(nextAgents, "edit");
         return;
@@ -830,7 +830,7 @@ export default {
             allowed_user: allowedUser,
           },
         ],
-        "create"
+        "create",
       );
     },
     showDeleteAgentModal(agentData) {
@@ -855,14 +855,14 @@ export default {
         return;
       }
       const nextAgents = this.agents.filter(
-        (agentData) => agentData.id !== this.agentToDelete.id
+        (agentData) => agentData.id !== this.agentToDelete.id,
       );
       this.saveAgents(nextAgents, "delete");
     },
     setAgentStatus(agentId, status) {
       this.error.configureModule = "";
       this.agents = this.agents.map((agentData) =>
-        agentData.id === agentId ? { ...agentData, status } : agentData
+        agentData.id === agentId ? { ...agentData, status } : agentData,
       );
     },
     saveAgentsFromPage() {
@@ -901,7 +901,7 @@ export default {
         (taskContext, taskResult) => {
           this.userDomains = normalizeUserDomains(taskResult.output.domains);
           this.loading.listUserDomains = false;
-        }
+        },
       );
 
       const res = await to(
@@ -913,7 +913,7 @@ export default {
             isNotificationHidden: true,
             eventId,
           },
-        })
+        }),
       );
       const err = res[0];
 
@@ -957,7 +957,7 @@ export default {
           ) {
             this.agentForm = { ...this.agentForm, allowed_user: "" };
           }
-        }
+        },
       );
 
       const res = await to(
@@ -971,7 +971,7 @@ export default {
             isNotificationHidden: true,
             eventId,
           },
-        })
+        }),
       );
       const err = res[0];
 
