@@ -321,6 +321,8 @@ python3 -m pip install -r tests/requirements-auth.txt
 
 Python style is enforced with `ruff check .` and `ruff format --check .` (configuration in `ruff.toml`; the extensionless action and helper scripts are included explicitly). The UI has Jest tests for its pure page logic (`cd ui && yarn test:unit`). The `Test` GitHub Actions workflow runs both suites on every push to `main` and every pull request, together with the UI lint and production build. Keep that workflow green before merging.
 
+The suite also runs from CI for a pull request when the `integration-test` label is set (`.github/workflows/test-module-pr.yml`): images are pushed to `ghcr.io` under a `pr-<number>` tag and one disposable DigitalOcean node runs the suite. It still runs automatically after every published release.
+
 Run the Robot Framework integration suite against a disposable NS8 node with:
 
 ```bash
