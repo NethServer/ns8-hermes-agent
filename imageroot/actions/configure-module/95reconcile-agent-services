@@ -97,7 +97,7 @@ def reconcile_auth(required, previous_fingerprint):
 
 def main():
     json.load(sys.stdin)
-    desired_agents = read_agents_from_state()
+    desired_agents = read_agents_from_state(strict=False)
     previous = read_runtime_fingerprints()
     next_fingerprints = {"agents": {}, "auth": ""}
 

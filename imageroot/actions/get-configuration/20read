@@ -15,17 +15,25 @@ from hermes_agent_state import (
     MAX_AGENTS,
     USER_DOMAIN_ENV,
     env_to_bool,
-    read_agents_from_state,
+    read_agent_state_report,
 )
 
 
 def main():
+    # One corrupt metadata file must not blank the whole Settings page: report
+    # the healthy agents and list the broken directories separately so the UI
+    # can warn and refuse to save (saving would delete the missing ids).
+    report = read_agent_state_report()
+    for entry in report["invalid"]:
+        print(f"get-configuration: ignoring agents/{entry['directory']}: {entry['error']}", file=sys.stderr)
+
     json.dump(
         {
             "base_virtualhost": (os.getenv(BASE_VIRTUALHOST_ENV) or "").strip().lower(),
             "user_domain": (os.getenv(USER_DOMAIN_ENV) or "").strip().lower(),
             "lets_encrypt": env_to_bool(os.getenv(LETS_ENCRYPT_ENV)),
-            "agents": read_agents_from_state(),
+            "agents": report["agents"],
+            "invalid_agents": report["invalid"],
             # Published so the UI never has to hardcode (and drift from) the
             # validation constants owned by hermes_agent_state.
             "roles": list(ALLOWED_ROLES),

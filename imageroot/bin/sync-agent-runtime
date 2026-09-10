@@ -29,7 +29,7 @@ from hermes_agent_state import (
     USER_DOMAIN_ENV,
     agent_dashboard_socket_path,
     ensure_private_directory,
-    read_agents_from_state,
+    read_agent_state_report,
     write_jsonfile,
 )
 from hermes_user_domain import public_runtime_env, secrets_runtime_env
@@ -54,8 +54,19 @@ def read_optional_envfile(path):
     return agent.read_envfile(path)
 
 
-def agent_by_id(agent_id):
-    for agent_data in read_agents_from_state():
+def read_valid_agents():
+    # A corrupt sibling must not stop this agent's unit from starting; report
+    # the broken directories on stderr and carry on with the healthy set.
+    report = read_agent_state_report()
+    for entry in report["invalid"]:
+        print(f"sync-agent-runtime: ignoring agents/{entry['directory']}: {entry['error']}", file=sys.stderr)
+    return report["agents"]
+
+
+def agent_by_id(agent_id, agent_data_list=None):
+    if agent_data_list is None:
+        agent_data_list = read_valid_agents()
+    for agent_data in agent_data_list:
         if agent_data["id"] == agent_id:
             return agent_data
 
@@ -175,10 +186,10 @@ def build_authproxy_secrets(shared_secrets, shared_environment):
     return env_data
 
 
-def build_authproxy_agents(shared_environment):
+def build_authproxy_agents(agent_data_list):
     agent_records = []
 
-    for agent_data in read_agents_from_state():
+    for agent_data in agent_data_list:
         allowed_user = (agent_data.get("allowed_user") or "").strip()
         if not allowed_user:
             continue
@@ -199,13 +210,13 @@ def build_authproxy_agents(shared_environment):
 def sync_agent_runtime_files(agent_id=None):
     shared_environment = agent.read_envfile("environment")
     shared_secrets = ensure_shared_session_secret(agent.read_envfile(SHARED_SECRETS_ENVFILE))
-    all_agent_data = read_agents_from_state()
-    agent_data_list = [agent_by_id(agent_id)] if agent_id is not None else all_agent_data
+    all_agent_data = read_valid_agents()
+    agent_data_list = [agent_by_id(agent_id, all_agent_data)] if agent_id is not None else all_agent_data
     known_api_server_keys = existing_agent_api_server_keys(all_agent_data)
 
     agent.write_envfile(AUTHPROXY_ENVFILE, build_authproxy_env(shared_environment))
     agent.write_envfile(AUTHPROXY_SECRETS_ENVFILE, build_authproxy_secrets(shared_secrets, shared_environment))
-    write_jsonfile(AUTHPROXY_AGENTS_FILE, build_authproxy_agents(shared_environment))
+    write_jsonfile(AUTHPROXY_AGENTS_FILE, build_authproxy_agents(all_agent_data))
     if LEGACY_AUTHPROXY_AGENTS_FILE.is_file():
         LEGACY_AUTHPROXY_AGENTS_FILE.unlink()
 

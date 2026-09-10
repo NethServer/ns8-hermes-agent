@@ -35,7 +35,7 @@ def main():
                     "id": agent_data["id"],
                     "runtime_status": runtime_status(agent_data["id"]),
                 }
-                for agent_data in read_agents_from_state()
+                for agent_data in read_agents_from_state(strict=False)
             ]
         },
         fp=sys.stdout,

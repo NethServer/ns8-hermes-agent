@@ -79,7 +79,9 @@
     "stop_agent": "Stop",
     "role_unknown": "Ruolo sconosciuto ({role})",
     "unknown_role_title": "Ruolo agente non riconosciuto",
-    "unknown_role_blocks_save": "Uno o più agenti usano un ruolo che questa versione dell'interfaccia non conosce. Aggiorna il modulo prima di salvare, altrimenti quegli agenti non potrebbero essere preservati."
+    "unknown_role_blocks_save": "Uno o più agenti usano un ruolo che questa versione dell'interfaccia non conosce. Aggiorna il modulo prima di salvare, altrimenti quegli agenti non potrebbero essere preservati.",
+    "invalid_agent_state_title": "Stato agente danneggiato",
+    "invalid_agent_state_description": "I metadati delle directory agente {directories} non sono leggibili. Ripristinali o rimuovili sul nodo prima di salvare; il modulo rifiuta le modifiche di configurazione finché non è risolto."
   },
   "error": {
     "error": "Errore",

@@ -229,10 +229,10 @@ api-cli run module/hermes-agent1/get-configuration --data '{}'
 Example output:
 
 ```json
-{"base_virtualhost": "agents.example.org", "user_domain": "example.org", "lets_encrypt": true, "agents": [{"id": 1, "name": "Foo Bar", "role": "developer", "status": "start", "allowed_user": "alice"}], "roles": ["default", "developer", "marketing", "sales", "customer_support", "social_media_manager", "business_consultant", "researcher"], "max_agents": 30}
+{"base_virtualhost": "agents.example.org", "user_domain": "example.org", "lets_encrypt": true, "agents": [{"id": 1, "name": "Foo Bar", "role": "developer", "status": "start", "allowed_user": "alice"}], "roles": ["default", "developer", "marketing", "sales", "customer_support", "social_media_manager", "business_consultant", "researcher"], "max_agents": 30, "invalid_agents": []}
 ```
 
-`status` is the persisted desired state. `roles` and `max_agents` expose the validation constants so the UI never hardcodes them.
+`status` is the persisted desired state. `roles` and `max_agents` expose the validation constants so the UI never hardcodes them. `invalid_agents` lists `agents/<id>` directories whose `metadata.json` is corrupt or whose id does not match the directory; such agents are excluded from `agents`, the UI shows an error, and `configure-module` fails validation with `agent_state_invalid` until the directory is repaired or removed on the node, because saving without them would delete their state.
 
 Read live runtime state with:
 

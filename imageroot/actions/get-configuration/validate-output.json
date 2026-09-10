@@ -12,7 +12,8 @@
         "lets_encrypt",
         "agents",
         "roles",
-        "max_agents"
+        "max_agents",
+        "invalid_agents"
     ],
     "properties": {
         "roles": {
@@ -37,6 +38,19 @@
             "description": "Highest agent id accepted by configure-module.",
             "type": "integer",
             "const": 30
+        },
+        "invalid_agents": {
+            "description": "Agent state directories whose metadata.json could not be validated. configure-module refuses to run until they are repaired or removed.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["directory", "error"],
+                "properties": {
+                    "directory": {"type": "string"},
+                    "error": {"type": "string"}
+                }
+            }
         },
         "base_virtualhost": {
             "type": "string"

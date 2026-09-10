@@ -3606,8 +3606,79 @@ class HermesModuleStateTest(unittest.TestCase):
                     ],
                     "roles": list(self.state.ALLOWED_ROLES),
                     "max_agents": self.state.MAX_AGENTS,
+                    "invalid_agents": [],
                 },
             )
+
+    def write_corrupt_agent_state(self):
+        """agents/1 valid, agents/2 corrupt JSON, agents/3 id/directory mismatch."""
+        self.state.write_jsonfile(
+            Path("agents") / "1" / "metadata.json",
+            {"id": 1, "name": "Healthy Agent", "role": "default", "status": "start", "allowed_user": "alice"},
+        )
+        self.state.ensure_private_directory(Path("agents") / "2")
+        (Path("agents") / "2" / "metadata.json").write_text("{not json", encoding="utf-8")
+        self.state.write_jsonfile(
+            Path("agents") / "3" / "metadata.json",
+            {"id": 9, "name": "Moved Agent", "role": "default", "status": "start", "allowed_user": "bob"},
+        )
+
+    def test_read_agent_state_report_isolates_broken_records(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            self.write_corrupt_agent_state()
+
+            report = self.state.read_agent_state_report()
+            self.assertEqual([agent_data["id"] for agent_data in report["agents"]], [1])
+            self.assertEqual([entry["directory"] for entry in report["invalid"]], ["2", "3"])
+            self.assertIn("does not match directory", report["invalid"][1]["error"])
+
+            self.assertEqual([a["id"] for a in self.state.read_agents_from_state(strict=False)], [1])
+            with self.assertRaisesRegex(ValueError, r"agents/2.*agents/3"):
+                self.state.read_agents_from_state()
+
+    def test_get_configuration_reports_invalid_agents_instead_of_failing(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            self.write_corrupt_agent_state()
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {}, clear=False), mock.patch("sys.stdout", stdout), mock.patch(
+                "sys.stderr", io.StringIO()
+            ):
+                runpy.run_path(str(GET_CONFIGURATION_PATH), run_name="__main__")
+            output = json.loads(stdout.getvalue())
+            self.assertEqual([a["id"] for a in output["agents"]], [1])
+            self.assertEqual([entry["directory"] for entry in output["invalid_agents"]], ["2", "3"])
+
+    def test_configure_module_validation_refuses_to_run_over_corrupt_agent_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), stubbed_agent_module(
+            set_status=mock.Mock()
+        ) as agent_stub:
+            self.write_corrupt_agent_state()
+            stdout = io.StringIO()
+            request = json.dumps({"agents": [{"id": 1, "name": "Healthy Agent", "role": "default", "status": "start"}]})
+            with mock.patch("sys.stdin", io.StringIO(request)), mock.patch("sys.stdout", stdout), mock.patch(
+                "sys.stderr", io.StringIO()
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    runpy.run_path(str(CONFIGURE_MODULE_ACTION_DIR / "10validate-input"), run_name="__main__")
+            self.assertEqual(raised.exception.code, 2)
+            agent_stub.set_status.assert_called_once_with("validation-failed")
+            self.assertEqual(json.loads(stdout.getvalue())[0]["error"], "agent_state_invalid")
+            self.assertEqual(json.loads(stdout.getvalue())[0]["value"], ["2", "3"])
+
+    def test_sync_agent_runtime_tolerates_corrupt_sibling_agent(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            self.write_corrupt_agent_state()
+            write_envfile(self.state.ENVIRONMENT_FILE, {"TIMEZONE": "UTC"})
+            with mock.patch.object(self.sync.agent, "read_envfile", side_effect=read_envfile, create=True), mock.patch.object(
+                self.sync.agent, "write_envfile", side_effect=write_envfile, create=True
+            ), mock.patch("sys.stderr", io.StringIO()) as stderr:
+                self.sync.sync_agent_runtime_files(agent_id=1)
+                self.sync.sync_agent_runtime_files()
+            self.assertTrue((Path("agents") / "1" / "agent.env").is_file())
+            self.assertFalse((Path("agents") / "3" / "agent.env").exists())
+            registry = json.loads(self.state.AUTHPROXY_AGENTS_FILE.read_text(encoding="utf-8"))
+            self.assertEqual([record["id"] for record in registry["agents"]], [1])
+            self.assertIn("ignoring agents/2", stderr.getvalue())
 
     def test_validation_constants_match_schemas_and_ui_fallbacks(self):
         """Roles, the name pattern and the agent limit are defined once in

@@ -69,7 +69,7 @@ def main():
     requested_base_virtualhost = ((request.get("base_virtualhost") or "").strip().lower() if "base_virtualhost" in request else None)
     lets_encrypt = env_to_bool(os.getenv(LETS_ENCRYPT_ENV))
     previous_lets_encrypt = env_to_bool(os.getenv(LETS_ENCRYPT_PREVIOUS_ENV))
-    desired_agents = read_agents_from_state()
+    desired_agents = read_agents_from_state(strict=False)
 
     if not base_virtualhost and requested_base_virtualhost is None and not previous_base_virtualhost:
         sys.exit(0)

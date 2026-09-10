@@ -15,6 +15,7 @@ from hermes_agent_state import (
     BASE_VIRTUALHOST_PATTERN,
     MAX_AGENTS,
     NAME_PATTERN,
+    read_agent_state_report,
 )
 from hermes_user_domain import (
     auth_required,
@@ -51,6 +52,18 @@ def main():
 
     if not isinstance(request, dict):
         fail("(root)", "(root)", request, "invalid_request")
+
+    # A broken agents/<id>/metadata.json hides that agent from the submitted
+    # list, and 40remove-deleted-agents would then wipe its home. Refuse until
+    # the operator repairs or removes the directory.
+    invalid_state = read_agent_state_report()["invalid"]
+    if invalid_state:
+        fail(
+            "(state)",
+            "agents",
+            [entry["directory"] for entry in invalid_state],
+            "agent_state_invalid",
+        )
 
     if "base_virtualhost" in request:
         base_virtualhost = (request.get("base_virtualhost") or "").strip().lower()

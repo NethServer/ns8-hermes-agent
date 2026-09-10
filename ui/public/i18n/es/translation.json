@@ -70,7 +70,9 @@
     "stop_agent": "Stop",
     "role_unknown": "Rol desconocido ({role})",
     "unknown_role_title": "Rol de agente no reconocido",
-    "unknown_role_blocks_save": "Uno o más agentes usan un rol que esta versión de la interfaz no conoce. Actualiza el módulo antes de guardar; de lo contrario esos agentes no podrían conservarse."
+    "unknown_role_blocks_save": "Uno o más agentes usan un rol que esta versión de la interfaz no conoce. Actualiza el módulo antes de guardar; de lo contrario esos agentes no podrían conservarse.",
+    "invalid_agent_state_title": "Estado de agente dañado",
+    "invalid_agent_state_description": "No se pueden leer los metadatos de los directorios de agente {directories}. Repáralos o elimínalos en el nodo antes de guardar; el módulo rechaza cambios de configuración hasta entonces."
   },
   "common": {
     "required": "Obligatorio",

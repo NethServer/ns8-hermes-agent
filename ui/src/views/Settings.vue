@@ -38,6 +38,17 @@
                     }}
                   </p>
                   <NsInlineNotification
+                    v-if="hasInvalidAgentState"
+                    kind="error"
+                    :title="$t('settings.invalid_agent_state_title')"
+                    :description="
+                      $t('settings.invalid_agent_state_description', {
+                        directories: invalidAgentDirectories,
+                      })
+                    "
+                    :showCloseButton="false"
+                  />
+                  <NsInlineNotification
                     v-if="hasUnknownRoles"
                     kind="warning"
                     :title="$t('settings.unknown_role_title')"
@@ -438,6 +449,7 @@ export default {
       userDomains: [],
       domainUsers: [],
       agents: [],
+      invalidAgents: [],
       configureMode: "",
       isShownAgentModal: false,
       agentModalMode: "create",
@@ -509,6 +521,12 @@ export default {
     },
     hasUnknownRoles() {
       return this.unknownRoleAgents.length > 0;
+    },
+    hasInvalidAgentState() {
+      return this.invalidAgents.length > 0;
+    },
+    invalidAgentDirectories() {
+      return this.invalidAgents.map((entry) => entry.directory).join(", ");
     },
   },
   beforeRouteEnter(to, from, next) {
@@ -587,6 +605,9 @@ export default {
       this.letsEncrypt = !!config.lets_encrypt;
       this.isLetsEncryptCurrentlyEnabled = !!config.lets_encrypt;
       this.agents = normalizeAgents(config.agents);
+      this.invalidAgents = Array.isArray(config.invalid_agents)
+        ? config.invalid_agents
+        : [];
       this.loadUserDomains();
       this.loadDomainUsers(this.userDomain);
     },
@@ -638,6 +659,14 @@ export default {
         // it; never let a UI/backend version skew alter agents.
         this.error.configureModule = this.$t(
           "settings.unknown_role_blocks_save",
+        );
+        return;
+      }
+      if (this.hasInvalidAgentState) {
+        // The backend refuses too (agent_state_invalid); fail fast here.
+        this.error.configureModule = this.$t(
+          "settings.invalid_agent_state_description",
+          { directories: this.invalidAgentDirectories },
         );
         return;
       }

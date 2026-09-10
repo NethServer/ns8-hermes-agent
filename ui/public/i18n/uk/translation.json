@@ -58,7 +58,9 @@
     "stop_agent": "Stop",
     "role_unknown": "Unknown role ({role})",
     "unknown_role_title": "Unrecognized agent role",
-    "unknown_role_blocks_save": "One or more agents use a role this version of the UI does not know. Update the module before saving, otherwise those agents could not be preserved."
+    "unknown_role_blocks_save": "One or more agents use a role this version of the UI does not know. Update the module before saving, otherwise those agents could not be preserved.",
+    "invalid_agent_state_title": "Damaged agent state",
+    "invalid_agent_state_description": "The metadata of agent directories {directories} cannot be read. Repair or remove them on the node before saving; the module refuses configuration changes until then."
   },
   "common": {
     "required": "Required",

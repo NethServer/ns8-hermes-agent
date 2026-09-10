@@ -180,7 +180,13 @@ def agent_dashboard_socket_path(agent_id, socket_dir=AUTHPROXY_SOCKET_MOUNT_DIR)
     return str(Path(socket_dir) / agent_dashboard_socket_name(agent_id))
 
 
-def read_agents_from_state():
+def read_agent_state_report():
+    """Read every agents/<id>/metadata.json and separate valid from broken ones.
+
+    Returns ``{"agents": [...], "invalid": [{"directory": "7", "error": "..."}]}``.
+    One corrupt or tampered file must not take every other agent down with it,
+    so callers that only need the healthy set use this and log the rest.
+    """
     def validate_agent_metadata(agent_data, index):
         # Metadata is written per agent on disk, so validate every record here
         # before the action layer turns it into systemd, route, or env changes.
@@ -227,8 +233,9 @@ def read_agents_from_state():
         }
 
     agents = []
+    invalid = []
     if not AGENTS_DIR.exists():
-        return agents
+        return {"agents": agents, "invalid": invalid}
 
     for path in sorted(
         AGENTS_DIR.iterdir(),
@@ -237,13 +244,31 @@ def read_agents_from_state():
         if not path.is_dir() or not AGENT_DIR_PATTERN.fullmatch(path.name):
             continue
 
-        metadata = read_jsonfile(path / "metadata.json")
-        if metadata is None:
+        try:
+            metadata = read_jsonfile(path / "metadata.json")
+            if metadata is None:
+                continue
+            if not isinstance(metadata, dict):
+                raise ValueError(f"agent at index {len(agents)} metadata is not an object")
+            agent_data = validate_agent_metadata(metadata, len(agents))
+            if str(agent_data["id"]) != path.name:
+                raise ValueError(f"agent at index {len(agents)} id {agent_data['id']} does not match directory {path.name}")
+        except (ValueError, OSError) as error:
+            invalid.append({"directory": path.name, "error": str(error)})
             continue
 
-        agents.append(validate_agent_metadata(metadata, len(agents)))
+        agents.append(agent_data)
 
-    return sorted(agents, key=lambda agent_data: agent_data["id"])
+    return {"agents": sorted(agents, key=lambda agent_data: agent_data["id"]), "invalid": invalid}
+
+
+def read_agents_from_state(strict=True):
+    """Return the valid agents; with ``strict`` (default) raise if any record is broken."""
+    report = read_agent_state_report()
+    if strict and report["invalid"]:
+        details = "; ".join(f"agents/{entry['directory']}: {entry['error']}" for entry in report["invalid"])
+        raise ValueError(f"invalid agent metadata: {details}")
+    return report["agents"]
 
 
 def list_known_agent_ids():
