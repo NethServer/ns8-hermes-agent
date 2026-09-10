@@ -12,7 +12,12 @@ SECRETS_DIR = Path("secrets")
 SHARED_SECRETS_ENVFILE = SECRETS_DIR / "shared.env"
 AUTHPROXY_ENVFILE = Path("authproxy.env")
 AUTHPROXY_SECRETS_ENVFILE = Path("authproxy_secrets.env")
-AUTHPROXY_AGENTS_FILE = Path("authproxy_agents.json")
+# Mounted as a directory into hermes-auth so atomic replacements of the
+# registry are visible to the running proxy (a single-file bind mount pins
+# the old inode).
+AUTHPROXY_DIR = Path("authproxy")
+AUTHPROXY_AGENTS_FILE = AUTHPROXY_DIR / "agents.json"
+LEGACY_AUTHPROXY_AGENTS_FILE = Path("authproxy_agents.json")
 AGENTS_DIR = Path("agents")
 AGENTS_HOME_VOLUME = "hermes-agents-home"
 AGENTS_HOME_MOUNT_DIR = "/opt/agents"

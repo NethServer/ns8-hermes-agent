@@ -324,6 +324,8 @@ def mocked_authproxy_dependencies():
         "ldap3.core.exceptions",
         "ldap3.utils",
         "ldap3.utils.conv",
+        "starlette",
+        "starlette.background",
         "uvicorn",
     ]
     original_modules = {name: sys.modules.get(name) for name in module_names}
@@ -469,6 +471,17 @@ def mocked_authproxy_dependencies():
     setattr(fastapi_responses_module, "PlainTextResponse", FakeResponse)
     setattr(fastapi_responses_module, "RedirectResponse", FakeResponse)
     setattr(fastapi_responses_module, "Response", FakeResponse)
+    setattr(fastapi_responses_module, "StreamingResponse", FakeResponse)
+    starlette_module = types.ModuleType("starlette")
+    starlette_background_module = types.ModuleType("starlette.background")
+
+    class FakeBackgroundTask:
+        def __init__(self, func, *args, **kwargs):
+            self.func = func
+            self.args = args
+            self.kwargs = kwargs
+
+    setattr(starlette_background_module, "BackgroundTask", FakeBackgroundTask)
     setattr(aiohttp_module, "ClientError", FakeAiohttpClientError)
     setattr(aiohttp_module, "ClientSession", FakeClientSession)
     setattr(aiohttp_module, "UnixConnector", FakeUnixConnector)
@@ -485,6 +498,7 @@ def mocked_authproxy_dependencies():
     setattr(itsdangerous_module, "BadTimeSignature", ValueError)
     setattr(itsdangerous_module, "URLSafeTimedSerializer", FakeSerializer)
     setattr(ldap3_module, "ALL", object())
+    setattr(ldap3_module, "NONE", object())
     setattr(ldap3_module, "Connection", FakeConnection)
     setattr(ldap3_module, "Server", object)
     setattr(ldap3_utils_conv_module, "escape_filter_chars", escape_filter_chars)
@@ -505,6 +519,8 @@ def mocked_authproxy_dependencies():
     sys.modules["ldap3.core.exceptions"] = ldap3_core_exceptions_module
     sys.modules["ldap3.utils"] = ldap3_utils_module
     sys.modules["ldap3.utils.conv"] = ldap3_utils_conv_module
+    sys.modules["starlette"] = starlette_module
+    sys.modules["starlette.background"] = starlette_background_module
     sys.modules["uvicorn"] = uvicorn_module
 
     try:
@@ -868,8 +884,11 @@ class HermesAuthProxyTest(unittest.TestCase):
         config = self.runtime_config(authproxy)
 
         class FakeUpstreamClient:
-            async def request(self, *args, **kwargs):
-                del args, kwargs
+            def build_request(self, *args, **kwargs):
+                return types.SimpleNamespace(args=args, kwargs=kwargs)
+
+            async def send(self, upstream_request, stream=False):
+                del upstream_request, stream
                 raise authproxy.httpx.ReadError("connection reset by peer")
 
         request = self.make_request(
@@ -908,13 +927,21 @@ class HermesAuthProxyTest(unittest.TestCase):
 
         class FakeUpstreamResponse:
             def __init__(self):
-                self.content = b"ok"
                 self.status_code = 200
                 self.headers = {}
 
+            async def aiter_raw(self):
+                yield b"ok"
+
+            async def aclose(self):
+                return None
+
         class FakeUpstreamClient:
-            async def request(self, *args, **kwargs):
-                del args, kwargs
+            def build_request(self, *args, **kwargs):
+                return types.SimpleNamespace(args=args, kwargs=kwargs)
+
+            async def send(self, upstream_request, stream=False):
+                del upstream_request, stream
                 return FakeUpstreamResponse()
 
         request = self.make_request(
@@ -1244,9 +1271,14 @@ class HermesAuthProxyTest(unittest.TestCase):
 
         class FakeUpstreamResponse:
             def __init__(self):
-                self.content = b"ok"
                 self.status_code = 200
                 self.headers = {"location": "http://agent-1/settings"}
+
+            async def aiter_raw(self):
+                yield b"ok"
+
+            async def aclose(self):
+                return None
 
         class FakeUdsClient:
             def __init__(self, *args, **kwargs):
@@ -1254,8 +1286,12 @@ class HermesAuthProxyTest(unittest.TestCase):
                 self.kwargs = kwargs
                 self.calls = []
 
-            async def request(self, *args, **kwargs):
-                self.calls.append({"args": args, "kwargs": kwargs})
+            def build_request(self, method, url, **kwargs):
+                self.calls.append({"args": (method,), "kwargs": {"url": url, **kwargs}})
+                return types.SimpleNamespace(method=method, url=url, **kwargs)
+
+            async def send(self, upstream_request, stream=False):
+                del upstream_request, stream
                 return FakeUpstreamResponse()
 
             async def aclose(self):
@@ -1308,16 +1344,25 @@ class HermesAuthProxyTest(unittest.TestCase):
 
         class FakeUpstreamResponse:
             def __init__(self):
-                self.content = b"ok"
                 self.status_code = 200
                 self.headers = {}
+
+            async def aiter_raw(self):
+                yield b"ok"
+
+            async def aclose(self):
+                return None
 
         class FakeUpstreamClient:
             def __init__(self):
                 self.calls = []
 
-            async def request(self, *args, **kwargs):
-                self.calls.append({"args": args, "kwargs": kwargs})
+            def build_request(self, method, url, **kwargs):
+                self.calls.append({"args": (method,), "kwargs": {"url": url, **kwargs}})
+                return types.SimpleNamespace(method=method, url=url, **kwargs)
+
+            async def send(self, upstream_request, stream=False):
+                del upstream_request, stream
                 return FakeUpstreamResponse()
 
         upstream_client = FakeUpstreamClient()
@@ -1663,7 +1708,9 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("EnvironmentFile=-%S/state/authproxy.env", auth_template)
         self.assertIn("--env-file %S/state/authproxy.env", auth_template)
         self.assertIn("--env-file %S/state/authproxy_secrets.env", auth_template)
-        self.assertIn("AUTH_PROXY_AGENT_REGISTRY=/app/authproxy_agents.json", auth_template)
+        self.assertIn("AUTH_PROXY_AGENT_REGISTRY=/app/authproxy/agents.json", auth_template)
+        self.assertIn("--volume %S/state/authproxy:/app/authproxy:ro,z", auth_template)
+        self.assertNotIn("authproxy_agents.json", auth_template)
         self.assertIn("AUTH_PROXY_PORT=9119", auth_template)
         self.assertIn("--volume %S/state/dashboard-sockets:/sockets:z", auth_template)
         self.assertIn("${HERMES_AGENT_AUTH_IMAGE}", auth_template)
@@ -1962,7 +2009,7 @@ class HermesModuleStateTest(unittest.TestCase):
             agent_secrets = read_envfile(self.state.SECRETS_DIR / "1.env")
             authproxy_env = read_envfile(Path("authproxy.env"))
             authproxy_secrets = read_envfile(Path("authproxy_secrets.env"))
-            authproxy_agents = json.loads(Path("authproxy_agents.json").read_text(encoding="utf-8"))
+            authproxy_agents = json.loads(self.state.AUTHPROXY_AGENTS_FILE.read_text(encoding="utf-8"))
             shared_secrets = read_envfile(self.state.SHARED_SECRETS_ENVFILE)
 
             self.assertEqual(public_env["AGENT_NAME"], "Alice User")
@@ -2857,7 +2904,7 @@ class HermesModuleStateTest(unittest.TestCase):
                 write_envfile(self.state.SECRETS_DIR / f"{agent_id}.env", {"API_SERVER_KEY": f"key{agent_id}"})
             write_envfile(Path("authproxy.env"), {"USER_DOMAIN": "example.org"})
             write_envfile(Path("authproxy_secrets.env"), {"HERMES_AUTH_SESSION_SECRET": "s"})
-            self.state.write_jsonfile(Path("authproxy_agents.json"), {"agents": []})
+            self.state.write_jsonfile(self.state.AUTHPROXY_AGENTS_FILE, {"agents": []})
 
             all_units = {"hermes@1.service", "hermes-socket@1.service", "hermes@2.service", "hermes-socket@2.service", "hermes-auth.service"}
 
@@ -2892,7 +2939,7 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertNotIn(["systemctl", "--user", "start", "hermes@2.service"], fourth)
 
             # Auth proxy inputs changed: only hermes-auth restarts.
-            self.state.write_jsonfile(Path("authproxy_agents.json"), {"agents": [{"id": 1}]})
+            self.state.write_jsonfile(self.state.AUTHPROXY_AGENTS_FILE, {"agents": [{"id": 1}]})
             fifth = self.run_reconcile_agent_services(active_units=all_units)
             self.assertIn(["systemctl", "--user", "start", "hermes-auth.service"], fifth)
             self.assertNotIn(["systemctl", "--user", "start", "hermes@1.service"], fifth)

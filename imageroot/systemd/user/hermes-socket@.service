@@ -29,7 +29,7 @@ ExecStart=runagent /usr/bin/podman run \
 		--volume %S/state/dashboard-sockets:/sockets:z \
 		--tz=${TIMEZONE} \
 		${HERMES_AGENT_SOCKET_IMAGE} \
-		-d -d \
+		-d \
 		UNIX-LISTEN:/sockets/agent-%i.sock,fork,unlink-early,mode=0660 \
 		TCP-CONNECT:127.0.0.1:9120
 ExecStop=/usr/bin/podman stop --ignore --time 10 hermes-socket-%i

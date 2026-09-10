@@ -19,6 +19,7 @@ from hermes_agent_state import (
     AUTH_SESSION_SECRET_KEY,
     AUTHPROXY_AGENTS_FILE,
     AUTHPROXY_ENVFILE,
+    LEGACY_AUTHPROXY_AGENTS_FILE,
     AUTHPROXY_SECRETS_ENVFILE,
     BASE_VIRTUALHOST_ENV,
     SECRETS_DIR,
@@ -205,6 +206,8 @@ def sync_agent_runtime_files(agent_id=None):
     agent.write_envfile(AUTHPROXY_ENVFILE, build_authproxy_env(shared_environment))
     agent.write_envfile(AUTHPROXY_SECRETS_ENVFILE, build_authproxy_secrets(shared_secrets, shared_environment))
     write_jsonfile(AUTHPROXY_AGENTS_FILE, build_authproxy_agents(shared_environment))
+    if LEGACY_AUTHPROXY_AGENTS_FILE.is_file():
+        LEGACY_AUTHPROXY_AGENTS_FILE.unlink()
 
     ensure_private_directory(SECRETS_DIR)
     for agent_data in agent_data_list:

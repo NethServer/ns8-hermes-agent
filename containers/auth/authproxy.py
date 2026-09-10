@@ -17,9 +17,10 @@ import aiohttp
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
-from ldap3 import ALL, Connection, Server
+from ldap3 import NONE, Connection, Server
+from starlette.background import BackgroundTask
 from ldap3.core.exceptions import LDAPException
 from ldap3.utils.conv import escape_filter_chars
 
@@ -198,8 +199,11 @@ def configure_logging():
 configure_logging()
 
 
+DEFAULT_AGENT_REGISTRY = "/app/authproxy/agents.json"
+
+
 def load_agent_registry(path):
-    registry_path = path or "/app/authproxy_agents.json"
+    registry_path = path or DEFAULT_AGENT_REGISTRY
 
     try:
         with open(registry_path, "r", encoding="utf-8") as registry_file:
@@ -237,7 +241,7 @@ def load_agent_registry(path):
 
 def load_config():
     ldap_port = int(env("LDAP_PORT", "389") or "389")
-    agents_by_id, agents_by_user = load_agent_registry(env("AUTH_PROXY_AGENT_REGISTRY", "/app/authproxy_agents.json"))
+    agents_by_id, agents_by_user = load_agent_registry(env("AUTH_PROXY_AGENT_REGISTRY", DEFAULT_AGENT_REGISTRY))
     return RuntimeConfig(
         user_domain=env("USER_DOMAIN").lower(),
         ldap_host=env("LDAP_HOST"),
@@ -310,7 +314,9 @@ def user_search_filter(username, schema):
 
 
 def ldap_server(config):
-    return Server(config.ldap_host, port=config.ldap_port, use_ssl=config.ldap_port == 636, get_info=ALL)
+    # get_info=NONE: the schema/DSA info fetch is a wasted round trip on every
+    # login; the search and bind below do not need it.
+    return Server(config.ldap_host, port=config.ldap_port, use_ssl=config.ldap_port == 636, get_info=NONE)
 
 
 @asynccontextmanager
@@ -843,6 +849,12 @@ def upstream_websocket_client_for_agent(request, agent_record):
     return client
 
 
+async def open_upstream_response(upstream_client, method, url, headers, content):
+    """Send the request and return the response with its body still open."""
+    upstream_request = upstream_client.build_request(method, url, headers=headers, content=content)
+    return await upstream_client.send(upstream_request, stream=True)
+
+
 async def proxy_to_agent(agent_record, request, authenticated_username=""):
     upstream_url = upstream_request_url(agent_record, request)
     upstream_client = upstream_client_for_agent(request, agent_record)
@@ -855,11 +867,12 @@ async def proxy_to_agent(agent_record, request, authenticated_username=""):
     )
 
     try:
-        upstream_response = await upstream_client.request(
-            method=request.method,
-            url=upstream_url,
-            headers=upstream_headers(request, authenticated_username=authenticated_username),
-            content=await request.body(),
+        upstream_response = await open_upstream_response(
+            upstream_client,
+            request.method,
+            upstream_url,
+            upstream_headers(request, authenticated_username=authenticated_username),
+            await request.body(),
         )
     except httpx.RequestError as exc:
         log_auth_event(
@@ -870,10 +883,14 @@ async def proxy_to_agent(agent_record, request, authenticated_username=""):
         )
         return upstream_unavailable_response()
 
-    return Response(
-        content=upstream_response.content,
+    # Stream the body through instead of buffering it: dashboards use
+    # server-sent events and file downloads that would otherwise stall until
+    # the upstream closed the connection or the 60 s timeout hit.
+    return StreamingResponse(
+        upstream_response.aiter_raw(),
         status_code=upstream_response.status_code,
         headers=response_headers(upstream_response, agent_record.upstream_origin),
+        background=BackgroundTask(upstream_response.aclose),
     )
 
 
@@ -989,7 +1006,17 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 
 @app.get("/health")
 async def health():
-    return JSONResponse({"status": "ok"})
+    # Always 200 so unit/robot readiness probes see the process is up; the
+    # payload says whether logins can currently succeed.
+    config = load_config()
+    return JSONResponse(
+        {
+            "status": "ok",
+            "configured": configuration_complete(config),
+            "agents": len(config.agents_by_id),
+            "running_agents": sum(1 for record in config.agents_by_id.values() if record.status == "start"),
+        }
+    )
 
 
 @app.get("/api/auth/me")
