@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
 from ldap3 import ALL, Connection, Server
+from ldap3.core.exceptions import LDAPException
 from ldap3.utils.conv import escape_filter_chars
 
 
@@ -356,6 +357,12 @@ def lookup_user_dn(username, config):
 
 
 def authenticate_credentials(username, password, config):
+    """Return True when the password binds as the looked-up user.
+
+    Raises LDAPException when the directory cannot be reached or searched, so
+    the caller can report an outage instead of a wrong password. A failed bind
+    (wrong password, locked account) is a plain False.
+    """
     if not username or not password:
         return False
 
@@ -366,7 +373,7 @@ def authenticate_credentials(username, password, config):
     try:
         with Connection(ldap_server(config), user=user_dn, password=password, auto_bind=True):
             return True
-    except Exception:
+    except LDAPException:
         return False
 
 
@@ -389,9 +396,19 @@ def request_path(request):
 
 
 def normalize_next_path(candidate, fallback="/"):
-    value = normalized_path(candidate or fallback)
-    if value.startswith("//"):
+    """Only ever redirect to a same-origin path.
+
+    Browsers turn ``/\\evil.example`` into a scheme-relative URL, and control
+    characters could split headers, so anything that is not a plain absolute
+    path on this host falls back to ``fallback``.
+    """
+    raw_value = str(candidate or fallback)
+    if "\\" in raw_value or any(ord(char) < 32 or ord(char) == 127 for char in raw_value):
         return fallback
+    parsed = urlsplit(raw_value)
+    if parsed.scheme or parsed.netloc or raw_value.startswith("//"):
+        return fallback
+    value = normalized_path(raw_value)
     if value in {LOGIN_PATH, LOGOUT_PATH}:
         return fallback
     if target_agent_id(value) is not None:
@@ -1118,7 +1135,27 @@ async def proxy(path: str, request: Request):
         target_record = login_target_agent(config, username, explicit_agent_id=explicit_agent)
         # Always verify the password, even for unassigned accounts, so response
         # timing does not reveal which usernames have a dashboard.
-        authenticated = authenticate_credentials(username, password, config)
+        try:
+            authenticated = authenticate_credentials(username, password, config)
+        except LDAPException as exc:
+            log_auth_event(
+                "auth_failed",
+                request,
+                agent_id=str(explicit_agent or ""),
+                username=username,
+                auth_method="form",
+                detail=f"ldap_unavailable {exc.__class__.__name__}",
+            )
+            return login_form_response(
+                config,
+                request,
+                error_message="The directory service is temporarily unavailable. Try again in a moment.",
+                username=username,
+                explicit_agent_id=explicit_agent,
+                next_path=next_path,
+                status_code=503,
+                extra_headers={"Retry-After": "30"},
+            )
         if target_record is None or not authenticated:
             LOGIN_THROTTLE.record_failure(throttle_keys)
             log_auth_event(

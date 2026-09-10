@@ -254,7 +254,7 @@ If `base_virtualhost` is configured, `https://<base_virtualhost>/` is the primar
 The shared auth service authenticates against the shared `user_domain`, maps the authenticated username to exactly one assigned running agent, and proxies the rest of that session's requests to the selected dashboard.
 `https://<base_virtualhost>/hermes-N/` remains an auth-owned login or session-status page for agent `N`; it is no longer a Traefik path route to the dashboard itself.
 The auth proxy logs `auth_attempt`, `auth_success`, `auth_failed`, and `proxy_failed` events to standard output for troubleshooting published dashboard access. The `remote=` field is the real client address taken from Traefik's `X-Forwarded-For` header.
-Form logins are throttled: after 5 failures within 60 seconds for the same client address or the same username, further attempts get HTTP 429 with a `Retry-After` header and an `auth_failed detail=rate_limited` log line, without contacting LDAP. Tune the limits with `AUTH_PROXY_LOGIN_MAX_FAILURES` and `AUTH_PROXY_LOGIN_WINDOW_SECONDS` in `authproxy.env` if needed. When `DEBUG=1` or `AUTH_PROXY_DEBUG=1`, it also logs `request_received` for inbound requests and `proxy_forward` with the resolved upstream URL before forwarding. If the assigned dashboard upstream is temporarily unavailable, the proxy returns HTTP 502 instead of terminating the app.
+Form logins are throttled: after 5 failures within 60 seconds for the same client address or the same username, further attempts get HTTP 429 with a `Retry-After` header and an `auth_failed detail=rate_limited` log line, without contacting LDAP. Tune the limits with `AUTH_PROXY_LOGIN_MAX_FAILURES` and `AUTH_PROXY_LOGIN_WINDOW_SECONDS` in `authproxy.env` if needed. When `DEBUG=1` or `AUTH_PROXY_DEBUG=1`, it also logs `request_received` for inbound requests and `proxy_forward` with the resolved upstream URL before forwarding. If the assigned dashboard upstream is temporarily unavailable, the proxy returns HTTP 502 instead of terminating the app. If LDAP itself cannot be reached during a login, the proxy answers HTTP 503 with `auth_failed detail=ldap_unavailable` and does not count the attempt against the login throttle. Post-login redirects only ever target a same-origin path.
 
 ## Runtime unit
 
@@ -307,10 +307,16 @@ If required by your environment, set `NODE_OPTIONS=--openssl-legacy-provider` be
 
 ## Testing
 
-Unit tests need only the Python standard library and run in well under a second:
+Unit tests need only the Python standard library and run in about a second:
 
 ```bash
 python3 -m unittest discover -s tests -v
+```
+
+`tests/test_authproxy_http.py` additionally drives the real FastAPI application through `fastapi.testclient` against a local HTTP upstream (login cookie flags, redirect sanitising, session tampering and expiry, identity header injection, 502/503 paths, websocket rejection). It is skipped unless the pinned dependencies are installed:
+
+```bash
+python3 -m pip install -r tests/requirements-auth.txt
 ```
 
 The `Test` GitHub Actions workflow runs them on every push to `main` and every pull request, together with the UI lint and production build. Keep that workflow green before merging.

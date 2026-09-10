@@ -320,6 +320,8 @@ def mocked_authproxy_dependencies():
         "httpx",
         "itsdangerous",
         "ldap3",
+        "ldap3.core",
+        "ldap3.core.exceptions",
         "ldap3.utils",
         "ldap3.utils.conv",
         "uvicorn",
@@ -332,6 +334,8 @@ def mocked_authproxy_dependencies():
     httpx_module = types.ModuleType("httpx")
     itsdangerous_module = types.ModuleType("itsdangerous")
     ldap3_module = types.ModuleType("ldap3")
+    ldap3_core_module = types.ModuleType("ldap3.core")
+    ldap3_core_exceptions_module = types.ModuleType("ldap3.core.exceptions")
     ldap3_utils_module = types.ModuleType("ldap3.utils")
     ldap3_utils_conv_module = types.ModuleType("ldap3.utils.conv")
     uvicorn_module = types.ModuleType("uvicorn")
@@ -484,6 +488,11 @@ def mocked_authproxy_dependencies():
     setattr(ldap3_module, "Connection", FakeConnection)
     setattr(ldap3_module, "Server", object)
     setattr(ldap3_utils_conv_module, "escape_filter_chars", escape_filter_chars)
+
+    class FakeLDAPException(Exception):
+        pass
+
+    setattr(ldap3_core_exceptions_module, "LDAPException", FakeLDAPException)
     setattr(uvicorn_module, "run", lambda *args, **kwargs: None)
 
     sys.modules["aiohttp"] = aiohttp_module
@@ -492,6 +501,8 @@ def mocked_authproxy_dependencies():
     sys.modules["httpx"] = httpx_module
     sys.modules["itsdangerous"] = itsdangerous_module
     sys.modules["ldap3"] = ldap3_module
+    sys.modules["ldap3.core"] = ldap3_core_module
+    sys.modules["ldap3.core.exceptions"] = ldap3_core_exceptions_module
     sys.modules["ldap3.utils"] = ldap3_utils_module
     sys.modules["ldap3.utils.conv"] = ldap3_utils_conv_module
     sys.modules["uvicorn"] = uvicorn_module
@@ -788,6 +799,56 @@ class HermesAuthProxyTest(unittest.TestCase):
 
         self.assertEqual(response.kwargs["status_code"], 401)
         authenticate.assert_called_once()
+
+    def test_normalize_next_path_only_allows_same_origin_paths(self):
+        authproxy = self.load_authproxy()
+        cases = {
+            "/dashboard?tab=1": "/dashboard?tab=1",
+            "dashboard": "/dashboard",
+            "": "/",
+            None: "/",
+            "//evil.example/x": "/",
+            "/\\evil.example": "/",
+            "/\\\\evil.example": "/",
+            "https://evil.example/": "/",
+            "javascript:alert(1)": "/",
+            "/ok\r\nSet-Cookie: x=y": "/",
+            "/login": "/",
+            "/logout": "/",
+            "/hermes-3/": "/",
+        }
+        for candidate, expected in cases.items():
+            with self.subTest(candidate=candidate):
+                self.assertEqual(authproxy.normalize_next_path(candidate), expected)
+
+    def test_proxy_reports_ldap_outage_as_503_not_wrong_password(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        class FakeUpstreamClient:
+            async def request(self, *args, **kwargs):
+                raise AssertionError("upstream should not be called")
+
+        request = self.make_request(
+            FakeUpstreamClient(),
+            headers={"content-type": "application/x-www-form-urlencoded"},
+            path="/login",
+            method="POST",
+            body=b"username=alice&password=secret&next=%2F",
+        )
+
+        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
+            authproxy,
+            "authenticate_credentials",
+            side_effect=authproxy.LDAPException("connection refused"),
+        ), mock.patch.object(authproxy.LOGGER, "info") as log_info:
+            response = asyncio.run(authproxy.proxy("", request))
+
+        self.assertEqual(response.kwargs["status_code"], 503)
+        self.assertIn("Retry-After", response.kwargs["headers"])
+        self.assertIn("detail=ldap_unavailable", log_info.call_args_list[-1].args[0])
+        # An outage must not count against the user's login throttle.
+        self.assertEqual(authproxy.LOGIN_THROTTLE.retry_after(["user:alice"]), 0)
 
     def test_run_server_trusts_forwarded_headers_from_traefik(self):
         authproxy = self.load_authproxy()
