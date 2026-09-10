@@ -11,4 +11,10 @@ module.exports = {
     "no-console": "off",
     "no-debugger": process.env.NODE_ENV === "production" ? "warn" : "off",
   },
+  overrides: [
+    {
+      files: ["tests/unit/**/*.spec.js", "jest.config.js"],
+      env: { jest: true, node: true },
+    },
+  ],
 };

@@ -3582,13 +3582,14 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertEqual(output_schema["properties"]["roles"]["items"]["enum"], roles)
         self.assertEqual(output_schema["properties"]["max_agents"]["const"], self.state.MAX_AGENTS)
 
-        settings_vue = (ROOT / "ui" / "src" / "views" / "Settings.vue").read_text(encoding="utf-8")
-        ui_roles_match = re.search(r"roles:\s*\[(.*?)\]", settings_vue, re.DOTALL)
-        self.assertIsNotNone(ui_roles_match, "Settings.vue must keep a roles fallback list")
+        ui_helpers = (ROOT / "ui" / "src" / "lib" / "agents.js").read_text(encoding="utf-8")
+        ui_roles_match = re.search(r"export const FALLBACK_ROLES = \[(.*?)\];", ui_helpers, re.DOTALL)
+        self.assertIsNotNone(ui_roles_match, "ui/src/lib/agents.js must keep a FALLBACK_ROLES list")
         ui_roles = re.findall(r'"([a-z_]+)"', ui_roles_match.group(1))
         self.assertEqual(ui_roles, roles)
-        self.assertIn(f"maxAgents: {self.state.MAX_AGENTS},", settings_vue)
-        self.assertIn(self.state.NAME_PATTERN.pattern, settings_vue)
+        self.assertIn(f"export const FALLBACK_MAX_AGENTS = {self.state.MAX_AGENTS};", ui_helpers)
+        self.assertIn(f"export const AGENT_NAME_PATTERN = /{self.state.NAME_PATTERN.pattern}/;", ui_helpers)
+        self.assertIn(self.state.BASE_VIRTUALHOST_PATTERN.pattern, ui_helpers)
 
     def test_get_agent_runtime_reports_actual_runtime_status(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):

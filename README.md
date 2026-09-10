@@ -319,7 +319,7 @@ python3 -m unittest discover -s tests -v
 python3 -m pip install -r tests/requirements-auth.txt
 ```
 
-The `Test` GitHub Actions workflow runs them on every push to `main` and every pull request, together with the UI lint and production build. Keep that workflow green before merging.
+The UI has Jest tests for its pure page logic (`cd ui && yarn test:unit`). The `Test` GitHub Actions workflow runs both suites on every push to `main` and every pull request, together with the UI lint and production build. Keep that workflow green before merging.
 
 Run the Robot Framework integration suite against a disposable NS8 node with:
 

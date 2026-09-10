@@ -133,7 +133,10 @@ The embedded admin UI uses Vue 2 and Vue CLI.
 - `public/i18n/`: translation files.
 - `src/router/index.js`: routes for status, settings, and about.
 - `src/store/index.js`: embedded module context store.
-- `src/views/Settings.vue`: shared dashboard virtualhost, shared `user_domain`, shared `lets_encrypt`, per-agent `allowed_user`, the agent list, create/edit/delete modals, and start/stop state management.
+- `src/views/Settings.vue`: shared dashboard virtualhost, shared `user_domain`, shared `lets_encrypt`, per-agent `allowed_user`, the agent list, the delete modal, start/stop state management, and the task calls; delegates the create/edit form to `AgentFormModal` and all pure logic to `src/lib/agents.js`.
+- `src/components/AgentFormModal.vue`: single create/edit agent modal driven by `v-model` and an `errors` object from the parent.
+- `src/lib/agents.js`: framework-free helpers (agent normalization, validation mirroring `configure-module`, id allocation, `validation-failed` mapping, domain and user helpers) with the fallback validation constants.
+- `tests/unit/agents.spec.js` and `jest.config.js`: Jest unit tests for `src/lib/agents.js`, run with `yarn test:unit`.
 
 ## `tests/`
 
