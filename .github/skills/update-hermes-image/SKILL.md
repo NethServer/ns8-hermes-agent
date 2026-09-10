@@ -23,8 +23,9 @@ Always update these files together:
 
 After choosing the new image, inspect these files for assumptions that may need follow-up edits if the upstream image layout changed:
 
-- `containers/hermes/entrypoint.sh`
+- `containers/hermes/Containerfile` (the wrapper keeps the upstream `/init` entrypoint; there is no custom entrypoint script)
 - `imageroot/bin/ensure-agent-home-ownership`
+- `imageroot/actions/configure-module/75seed-agent-home`
 
 Confirm that the upstream image still provides:
 
@@ -41,7 +42,7 @@ Confirm that the upstream image still provides:
 3. Update the exact-string assertion in `tests/test_runtime_validation.py`.
 4. Update the matching upstream-image reference in `README.md`, `NS8-MODULE.md`, and `STRUCTURE.md`.
 5. Search the repo for `docker.io/nousresearch/hermes-agent` and replace any remaining stale references that describe the wrapper base image.
-6. Inspect `containers/hermes/entrypoint.sh` and `imageroot/bin/ensure-agent-home-ownership` for upstream layout or user or permission assumptions. Only edit them if the new upstream image requires it.
+6. Inspect `containers/hermes/Containerfile`, `imageroot/bin/ensure-agent-home-ownership` and `imageroot/actions/configure-module/75seed-agent-home` for upstream layout, user or permission assumptions. Only edit them if the new upstream image requires it.
 7. Run the narrow validation command: `pytest tests/test_runtime_validation.py -k hermes_containerfile_uses_expected_base_image`
 8. If the bump changes runtime assumptions, run broader validation that matches the touched surface.
 

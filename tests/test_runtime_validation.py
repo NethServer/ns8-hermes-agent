@@ -27,8 +27,6 @@ SOCKET_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes
 AUTH_CONTAINERFILE_PATH = ROOT / "containers" / "auth" / "Containerfile"
 HERMES_CONTAINERFILE_PATH = ROOT / "containers" / "hermes" / "Containerfile"
 SOCKET_CONTAINERFILE_PATH = ROOT / "containers" / "socket" / "Containerfile"
-HERMES_ENTRYPOINT_PATH = ROOT / "containers" / "hermes" / "entrypoint.sh"
-HERMES_DASHBOARD_PATCH_PATH = ROOT / "containers" / "hermes" / "patch_dashboard_source.py"
 BUILD_IMAGES_PATH = ROOT / "build-images.sh"
 BUILD_IMAGES_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "build-images.yml"
 PUBLISH_IMAGES_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "publish-images.yml"
@@ -1805,8 +1803,6 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn('build_component_image "hermes-agent-socket" "containers/socket"', build_script)
         self.assertIn('--label="org.nethserver.tcp-ports-demand=1"', build_script)
 
-    def test_hermes_wrapper_drops_legacy_custom_entrypoint(self):
-        self.assertFalse(HERMES_ENTRYPOINT_PATH.exists())
     def test_build_images_workflow_publishes_release_tag_and_latest_alias_from_main(self):
         workflow = BUILD_IMAGES_WORKFLOW_PATH.read_text(encoding="utf-8")
 
@@ -1832,9 +1828,6 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("NS8_MODULE_RELEASES_TOKEN", workflow)
         self.assertIn("gh extension install NethServer/gh-ns8-release-module", workflow)
         self.assertIn("gh ns8-release-module create --repo ${{ github.repository }} --testing", workflow)
-
-    def test_dashboard_patch_script_removed_from_wrapper(self):
-        self.assertFalse(HERMES_DASHBOARD_PATCH_PATH.exists())
 
     def test_smarthost_changed_event_restarts_active_primary_units(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -2662,52 +2655,6 @@ class HermesModuleStateTest(unittest.TestCase):
                         ),
                     ],
                 )
-        finally:
-            if original_agent is not None:
-                sys.modules["agent"] = original_agent
-            else:
-                del sys.modules["agent"]
-
-            if original_agent_tasks is not None:
-                sys.modules["agent.tasks"] = original_agent_tasks
-            elif "agent.tasks" in sys.modules:
-                del sys.modules["agent.tasks"]
-
-    def test_remove_deleted_routes_is_a_noop(self):
-        original_agent = sys.modules.get("agent")
-        original_agent_tasks = sys.modules.get("agent.tasks")
-        agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
-
-        agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
-        setattr(agent_stub, "assert_exp", mock.Mock())
-        setattr(agent_stub, "tasks", agent_tasks_stub)
-        sys.modules["agent"] = agent_stub
-        sys.modules["agent.tasks"] = agent_tasks_stub
-
-        try:
-            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
-                self.state.write_jsonfile(
-                    Path("agents") / "1" / "metadata.json",
-                    {"id": 1, "name": "Old Agent", "role": "developer", "status": "start"},
-                )
-
-                with mock.patch.dict(
-                    os.environ,
-                    {
-                        "MODULE_ID": "hermes-agent1",
-                        self.state.BASE_VIRTUALHOST_ENV: "agents.example.org",
-                        self.state.LETS_ENCRYPT_ENV: "true",
-                    },
-                    clear=False,
-                ), mock.patch("sys.stdin", io.StringIO(json.dumps({"agents": []}))):
-                    runpy.run_path(
-                        str(CONFIGURE_MODULE_ACTION_DIR / "30remove-deleted-routes"),
-                        run_name="__main__",
-                    )
-
-                agent_tasks_stub.run.assert_not_called()
         finally:
             if original_agent is not None:
                 sys.modules["agent"] = original_agent

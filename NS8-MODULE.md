@@ -239,7 +239,6 @@ Seeding is strict first-write only: later agent edits preserve existing `SOUL.md
 - `10validate-input`: validates the submitted agent list, optional shared virtualhost, optional shared `user_domain`, and optional shared `lets_encrypt`
 - `20persist-shared-env`: persists `base_virtualhost`, optional shared `user_domain`, plus `lets_encrypt`, tracks previous values for route cleanup, and backfills `TIMEZONE` when missing
 - `25configure-user-domain`: binds or unbinds the module relation to the selected NS8 user domain
-- `30remove-deleted-routes`: reserved lifecycle slot; removed-agent route cleanup is no longer needed because the module manages only the shared Traefik route
 - `40remove-deleted-agents`: stops removed services, removes removed pods and containers including `hermes-socket-<id>`, and delegates generated-state cleanup to `remove-agent-state`
 - `50write-agent-metadata`: writes one `metadata.json` file per desired agent, including persisted `allowed_user`
 - `60refresh-shared-settings`: runs `discover-smarthost`

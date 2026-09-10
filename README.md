@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="image" src="https://github.com/Stell0/ns8-hermes-agent/blob/main/logo.png" />
+  <img alt="ns8-hermes-agent logo" src="logo.png" />
 </p>
 
 # ns8-hermes-agent

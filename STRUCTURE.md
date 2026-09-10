@@ -15,7 +15,7 @@ This document maps the current layout.
 - `renovate.json`: Renovate configuration.
 - `.github/`: custom Copilot agents, repository skills, and GitHub Actions workflows.
 
-There is no `.devcontainer/` directory in the current tree.
+`.devcontainer/devcontainer.json` builds the UI development container from `ui/Containerfile` for VS Code; it is optional tooling and not part of the module image.
 
 ## `imageroot/`
 
@@ -50,7 +50,6 @@ Action directories contain numbered executable steps plus JSON schemas for publi
 - `configure-module/10validate-input`: validates the submitted `base_virtualhost`, optional shared `user_domain`, optional shared `lets_encrypt`, and agent list including per-agent `allowed_user`.
 - `configure-module/20persist-shared-env`: persists the shared virtualhost, optional shared `user_domain`, plus `lets_encrypt`, tracks previous route values for cleanup, and backfills `TIMEZONE`.
 - `configure-module/25configure-user-domain`: binds or unbinds the module from the selected NS8 user domain after shared settings are persisted.
-- `configure-module/30remove-deleted-routes`: reserved lifecycle slot; removed-agent route cleanup is no longer needed because the module manages only the shared Traefik route.
 - `configure-module/40remove-deleted-agents`: stops removed services, removes removed pods and containers including `hermes-socket-<id>`, and delegates generated-state cleanup.
 - `configure-module/50write-agent-metadata`: stores one metadata file per desired agent, including persisted `allowed_user`.
 - `configure-module/60refresh-shared-settings`: refreshes shared SMTP settings via `discover-smarthost`.
