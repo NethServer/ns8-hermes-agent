@@ -11,14 +11,14 @@ from action_logging import log_action_failure
 
 
 def main():
-	json.load(sys.stdin)
+    json.load(sys.stdin)
 
-	subprocess.run(["runagent", "discover-smarthost"], check=True)
+    subprocess.run(["runagent", "discover-smarthost"], check=True)
 
 
 if __name__ == "__main__":
-	try:
-		main()
-	except Exception as error:
-		log_action_failure("create-module/20discover-smarthost", error)
-		raise
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("create-module/20discover-smarthost", error)
+        raise

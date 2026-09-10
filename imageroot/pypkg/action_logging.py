@@ -37,8 +37,7 @@ def describe_task_failure(operation, response):
 def log_action_failure(action_name, error):
     if isinstance(error, subprocess.CalledProcessError):
         print(
-            f"{action_name} failed while running {_format_command(error.cmd)} "
-            f"(exit code {error.returncode})",
+            f"{action_name} failed while running {_format_command(error.cmd)} (exit code {error.returncode})",
             file=sys.stderr,
         )
         _print_stream(f"{action_name} stdout", getattr(error, "stdout", None))

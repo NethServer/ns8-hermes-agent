@@ -13,6 +13,7 @@ This document maps the current layout.
 - `build-images.sh`: builds the module image plus the auth proxy, Hermes wrapper, and socket relay component images.
 - `test-module.sh`: runs the module test suite.
 - `renovate.json`: Renovate configuration.
+- `ruff.toml`: Python lint/format baseline covering `imageroot/`, `containers/auth/` and `tests/`.
 - `.github/`: custom Copilot agents, repository skills, and GitHub Actions workflows.
 
 `.devcontainer/devcontainer.json` builds the UI development container from `ui/Containerfile` for VS Code; it is optional tooling and not part of the module image.

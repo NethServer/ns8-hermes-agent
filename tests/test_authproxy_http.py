@@ -71,9 +71,27 @@ class AuthProxyHttpTest(unittest.TestCase):
             json.dumps(
                 {
                     "agents": [
-                        {"id": 1, "name": "Agent One", "allowed_user": "alice", "status": "start", "upstream_url": cls.upstream_url},
-                        {"id": 2, "name": "Agent Two", "allowed_user": "bob", "status": "stop", "upstream_url": cls.upstream_url},
-                        {"id": 3, "name": "Agent Three", "allowed_user": "carol", "status": "start", "upstream_url": "http://127.0.0.1:9"},
+                        {
+                            "id": 1,
+                            "name": "Agent One",
+                            "allowed_user": "alice",
+                            "status": "start",
+                            "upstream_url": cls.upstream_url,
+                        },
+                        {
+                            "id": 2,
+                            "name": "Agent Two",
+                            "allowed_user": "bob",
+                            "status": "stop",
+                            "upstream_url": cls.upstream_url,
+                        },
+                        {
+                            "id": 3,
+                            "name": "Agent Three",
+                            "allowed_user": "carol",
+                            "status": "start",
+                            "upstream_url": "http://127.0.0.1:9",
+                        },
                     ]
                 }
             ),
@@ -189,7 +207,9 @@ class AuthProxyHttpTest(unittest.TestCase):
         with self.client() as client:
             self.login(client)
             client.cookies.set("unrelated", "keep-me")
-            response = client.get("/api/status?x=1", headers={"X-Hermes-Authenticated-User": "spoofed", "Authorization": "Bearer t"})
+            response = client.get(
+                "/api/status?x=1", headers={"X-Hermes-Authenticated-User": "spoofed", "Authorization": "Bearer t"}
+            )
 
         self.assertEqual(response.status_code, 200)
         echoed = response.json()

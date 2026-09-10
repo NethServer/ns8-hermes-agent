@@ -24,8 +24,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install auth proxy test dependencies
-        run: python -m pip install --disable-pip-version-check -r tests/requirements-auth.txt
+      - name: Install auth proxy test dependencies and ruff
+        run: python -m pip install --disable-pip-version-check -r tests/requirements-auth.txt ruff
+
+      - name: Lint and format check (ruff)
+        run: |
+          ruff check .
+          ruff format --check .
 
       - name: Run unit tests
         run: python -m unittest discover -s tests -v

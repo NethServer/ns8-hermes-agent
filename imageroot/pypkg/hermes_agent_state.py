@@ -6,7 +6,6 @@ import stat
 import tempfile
 from pathlib import Path
 
-
 ENVIRONMENT_FILE = Path("environment")
 SECRETS_DIR = Path("secrets")
 SHARED_SECRETS_ENVFILE = SECRETS_DIR / "shared.env"
@@ -187,14 +186,13 @@ def read_agent_state_report():
     One corrupt or tampered file must not take every other agent down with it,
     so callers that only need the healthy set use this and log the rest.
     """
+
     def validate_agent_metadata(agent_data, index):
         # Metadata is written per agent on disk, so validate every record here
         # before the action layer turns it into systemd, route, or env changes.
         extra_fields = sorted(set(agent_data) - {"id", "name", "role", "status", "allowed_user"})
         if extra_fields:
-            raise ValueError(
-                f"agent at index {index} has unexpected fields: {', '.join(extra_fields)}"
-            )
+            raise ValueError(f"agent at index {index} has unexpected fields: {', '.join(extra_fields)}")
 
         agent_id = agent_data.get("id")
         if not isinstance(agent_id, int) or agent_id < 1 or agent_id > MAX_AGENTS:
@@ -252,7 +250,9 @@ def read_agent_state_report():
                 raise ValueError(f"agent at index {len(agents)} metadata is not an object")
             agent_data = validate_agent_metadata(metadata, len(agents))
             if str(agent_data["id"]) != path.name:
-                raise ValueError(f"agent at index {len(agents)} id {agent_data['id']} does not match directory {path.name}")
+                raise ValueError(
+                    f"agent at index {len(agents)} id {agent_data['id']} does not match directory {path.name}"
+                )
         except (ValueError, OSError) as error:
             invalid.append({"directory": path.name, "error": str(error)})
             continue
@@ -293,6 +293,7 @@ def list_known_agent_ids():
                 record_agent_id(match.group(1))
 
     return sorted(ids)
+
 
 def _read_text_or_empty(path):
     file_path = Path(path)

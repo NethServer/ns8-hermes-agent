@@ -20,10 +20,9 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
 from ldap3 import NONE, Connection, Server
-from starlette.background import BackgroundTask
 from ldap3.core.exceptions import LDAPException
 from ldap3.utils.conv import escape_filter_chars
-
+from starlette.background import BackgroundTask
 
 SESSION_COOKIE = "hermes_dashboard_session"
 SESSION_TTL_SECONDS = 8 * 60 * 60
@@ -124,7 +123,9 @@ class LoginThrottle:
     enough to blunt credential stuffing against a single proxy container.
     """
 
-    def __init__(self, max_failures=LOGIN_MAX_FAILURES, window_seconds=LOGIN_FAILURE_WINDOW_SECONDS, clock=time.monotonic):
+    def __init__(
+        self, max_failures=LOGIN_MAX_FAILURES, window_seconds=LOGIN_FAILURE_WINDOW_SECONDS, clock=time.monotonic
+    ):
         self.max_failures = max(1, int(max_failures))
         self.window_seconds = max(1, int(window_seconds))
         self.clock = clock
@@ -206,7 +207,7 @@ def load_agent_registry(path):
     registry_path = path or DEFAULT_AGENT_REGISTRY
 
     try:
-        with open(registry_path, "r", encoding="utf-8") as registry_file:
+        with open(registry_path, encoding="utf-8") as registry_file:
             payload = json.load(registry_file)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}, {}
@@ -512,16 +513,27 @@ def configuration_required_response():
     return HTMLResponse(html, status_code=503, headers={"Cache-Control": "no-store"})
 
 
-def login_form_response(config, request, error_message="", username="", explicit_agent_id=None, next_path="/", status_code=None, extra_headers=None):
+def login_form_response(
+    config,
+    request,
+    error_message="",
+    username="",
+    explicit_agent_id=None,
+    next_path="/",
+    status_code=None,
+    extra_headers=None,
+):
     target_record = config.agents_by_id.get(explicit_agent_id) if explicit_agent_id is not None else None
     title = target_record.display_name if target_record is not None else "Hermes dashboard login"
-    heading = f"Sign in to {target_record.display_name}" if target_record is not None else "Sign in to your Hermes dashboard"
+    heading = (
+        f"Sign in to {target_record.display_name}" if target_record is not None else "Sign in to your Hermes dashboard"
+    )
     helper = (
         f"Authenticate to access {target_record.display_name}."
         if target_record is not None
         else "Authenticate with your assigned account to access the dashboard routed to your session."
     )
-    error_html = f"<p class=\"error\">{escape(error_message)}</p>" if error_message else ""
+    error_html = f'<p class="error">{escape(error_message)}</p>' if error_message else ""
     action_path = request_path(request) if explicit_agent_id is not None else LOGIN_PATH
     html = f"""<!doctype html>
 <html lang=\"en\">
@@ -662,7 +674,7 @@ def status_page_response(session_data, current_path):
   <body>
     <main>
       <h1>Signed in to {escape(agent_record.display_name)}</h1>
-      <p>Authenticated as <code>{escape(session_data['username'])}</code>.</p>
+      <p>Authenticated as <code>{escape(session_data["username"])}</code>.</p>
       <p>{escape(helper)}</p>
       <div class=\"actions\">
         <a href=\"/\">Open dashboard</a>
@@ -726,11 +738,7 @@ def upstream_headers(request, authenticated_username=""):
             continue
         forwarded_headers[name] = value
 
-    filtered_cookies = [
-        f"{name}={value}"
-        for name, value in request.cookies.items()
-        if name != SESSION_COOKIE
-    ]
+    filtered_cookies = [f"{name}={value}" for name, value in request.cookies.items() if name != SESSION_COOKIE]
     if filtered_cookies:
         forwarded_headers["Cookie"] = "; ".join(filtered_cookies)
 
@@ -748,17 +756,17 @@ def upstream_websocket_headers(request, authenticated_username=""):
     forwarded_headers = {}
     for name, value in request.headers.items():
         lower_name = name.lower()
-        if lower_name in HOP_BY_HOP_HEADERS or lower_name in WEBSOCKET_HANDSHAKE_HEADERS or lower_name in {"host", "authorization", AUTHENTICATED_USER_HEADER.lower()}:
+        if (
+            lower_name in HOP_BY_HOP_HEADERS
+            or lower_name in WEBSOCKET_HANDSHAKE_HEADERS
+            or lower_name in {"host", "authorization", AUTHENTICATED_USER_HEADER.lower()}
+        ):
             continue
         if lower_name == "cookie":
             continue
         forwarded_headers[name] = value
 
-    filtered_cookies = [
-        f"{name}={value}"
-        for name, value in request.cookies.items()
-        if name != SESSION_COOKIE
-    ]
+    filtered_cookies = [f"{name}={value}" for name, value in request.cookies.items() if name != SESSION_COOKIE]
     if filtered_cookies:
         forwarded_headers["Cookie"] = "; ".join(filtered_cookies)
 
@@ -1042,10 +1050,13 @@ async def auth_me(request: Request):
         )
 
     username = session_data["username"]
-    return JSONResponse({
-        "user_id": username,
-        "display_name": username,
-    }, status_code=200)
+    return JSONResponse(
+        {
+            "user_id": username,
+            "display_name": username,
+        },
+        status_code=200,
+    )
 
 
 @app.post(LOGOUT_PATH)

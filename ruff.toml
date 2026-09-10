@@ -1,0 +1,23 @@
+# Python style baseline for the NS8 module payload, the auth proxy and tests.
+# Action steps and helper scripts have no .py extension, so they are included
+# explicitly. Run: ruff check . && ruff format --check .
+line-length = 120
+target-version = "py311"
+extend-include = [
+  "imageroot/actions/*/[0-9]*",
+  "imageroot/bin/*",
+  "imageroot/update-module.d/*",
+]
+extend-exclude = ["ui", ".venv"]
+
+[lint]
+select = ["E", "F", "B", "UP", "I"]
+ignore = [
+  # Action steps must extend sys.path before importing pypkg helpers.
+  "E402",
+  # Long literal strings in tests and templates; the formatter handles code.
+  "E501",
+]
+
+[lint.isort]
+known-first-party = ["action_logging", "hermes_agent_state", "hermes_user_domain"]
