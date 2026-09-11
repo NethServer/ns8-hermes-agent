@@ -1949,7 +1949,7 @@ class HermesModuleStateTest(unittest.TestCase):
         )
 
         runner = TEST_MODULE_PATH.read_text(encoding="utf-8")
-        self.assertIn("rfbrowser-stable:v20.4.0", runner)
+        self.assertIn("rfbrowser-stable:20.1.0", runner)
 
         kickstart = KICKSTART_PATH.read_text(encoding="utf-8")
         self.assertIn("runagent -m ${module_id} sh -lc", kickstart)
