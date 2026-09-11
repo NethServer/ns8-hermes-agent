@@ -11,7 +11,7 @@
     "test:unit": "jest"
   },
   "dependencies": {
-    "@carbon/icons-vue": "10.63.0",
+    "@carbon/icons-vue": "^10.37.0",
     "@carbon/vue": "^2.40.0",
     "@nethserver/ns8-ui-lib": "^2.0.0",
     "await-to-js": "^3.0.0",

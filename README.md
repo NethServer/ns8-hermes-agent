@@ -305,8 +305,6 @@ yarn build
 
 The UI builds with Vue CLI 5 (webpack 5) on current Node LTS releases; no `NODE_OPTIONS` workaround is needed. Run the UI unit tests with `yarn test:unit`.
 
-Carbon icons are pinned to `10.63.0` for Vue 2.7 compatibility. Older versions mistake Vue 2.7 for Vue 3, dropping SVG attributes and clipping action labels; the icon rendering tests cover this regression.
-
 ## Testing
 
 Unit tests need only the Python standard library and run in about a second:

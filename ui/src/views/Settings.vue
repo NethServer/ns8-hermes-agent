@@ -241,37 +241,25 @@
                             <cv-overflow-menu-item
                               @click="showEditAgentModal(agentData)"
                             >
-                              <NsMenuItem
-                                :icon="Edit20"
-                                :label="$t('settings.edit_agent')"
-                              />
+                              {{ $t("settings.edit_agent") }}
                             </cv-overflow-menu-item>
                             <cv-overflow-menu-item
                               :disabled="agentData.status === 'start'"
                               @click="setAgentStatus(agentData.id, 'start')"
                             >
-                              <NsMenuItem
-                                :icon="Play20"
-                                :label="$t('settings.start_agent')"
-                              />
+                              {{ $t("settings.start_agent") }}
                             </cv-overflow-menu-item>
                             <cv-overflow-menu-item
                               :disabled="agentData.status === 'stop'"
                               @click="setAgentStatus(agentData.id, 'stop')"
                             >
-                              <NsMenuItem
-                                :icon="Stop20"
-                                :label="$t('settings.stop_agent')"
-                              />
+                              {{ $t("settings.stop_agent") }}
                             </cv-overflow-menu-item>
                             <cv-overflow-menu-item
                               danger
                               @click="showDeleteAgentModal(agentData)"
                             >
-                              <NsMenuItem
-                                :icon="TrashCan20"
-                                :label="$t('settings.delete_agent')"
-                              />
+                              {{ $t("settings.delete_agent") }}
                             </cv-overflow-menu-item>
                           </cv-overflow-menu>
                         </cv-structured-list-data>
@@ -377,8 +365,6 @@
 <script>
 import to from "await-to-js";
 import { mapState } from "vuex";
-import Play20 from "@carbon/icons-vue/es/play/20";
-import Stop20 from "@carbon/icons-vue/es/stop/20";
 import {
   QueryParamService,
   UtilService,
@@ -437,8 +423,6 @@ export default {
   },
   data() {
     return {
-      Play20,
-      Stop20,
       q: {
         page: "settings",
       },

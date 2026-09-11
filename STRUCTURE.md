@@ -138,7 +138,7 @@ The embedded admin UI uses Vue 2.7 on Vue CLI 5 (webpack 5), ESLint 8 and Pretti
 - `src/shims/crypto.js`: browser stand-in for the Node `crypto` module (only `randomBytes`, used by the uuid code bundled in `@nethserver/ns8-ui-lib`), aliased from `vue.config.js` because webpack 5 ships no Node polyfills.
 - `vue.config.js`: Vue CLI 5 configuration: image assets always emitted as files (module logo), the `crypto` alias, and the export-presence warning suppression explained inline.
 - `src/lib/agents.js`: framework-free helpers (agent normalization, validation mirroring `configure-module`, id allocation, `validation-failed` mapping, domain and user helpers) with the fallback validation constants.
-- `tests/unit/agents.spec.js`, `tests/unit/icons.spec.js`, and `jest.config.js`: Jest tests for `src/lib/agents.js` and Carbon SVG rendering with Vue 2.7, run with `yarn test:unit`.
+- `tests/unit/agents.spec.js` and `jest.config.js`: Jest unit tests for `src/lib/agents.js`, run with `yarn test:unit`.
 
 ## `tests/`
 
