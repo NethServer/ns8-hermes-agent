@@ -504,7 +504,11 @@ def mocked_authproxy_dependencies():
     class FakeLDAPException(Exception):
         pass
 
+    class FakeLDAPInvalidCredentialsResult(FakeLDAPException):
+        pass
+
     ldap3_core_exceptions_module.LDAPException = FakeLDAPException
+    ldap3_core_exceptions_module.LDAPInvalidCredentialsResult = FakeLDAPInvalidCredentialsResult
     uvicorn_module.run = lambda *args, **kwargs: None
 
     sys.modules["aiohttp"] = aiohttp_module
@@ -665,6 +669,36 @@ class HermesAuthProxyTest(unittest.TestCase):
             authproxy.user_search_filter("ali*(ce)", "rfc2307"),
             "(|(uid=ali\\2a\\28ce\\29)(cn=ali\\2a\\28ce\\29)(mail=ali\\2a\\28ce\\29))",
         )
+
+    def test_authenticate_credentials_returns_false_for_invalid_credentials(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        with (
+            mock.patch.object(authproxy, "lookup_user_dn", return_value="uid=alice,dc=example,dc=org"),
+            mock.patch.object(authproxy, "ldap_server", return_value=object()),
+            mock.patch.object(
+                authproxy,
+                "Connection",
+                side_effect=authproxy.LDAPInvalidCredentialsResult("invalid credentials"),
+            ) as connection,
+        ):
+            authenticated = authproxy.authenticate_credentials("alice", "wrong", config)
+
+        self.assertFalse(authenticated)
+        self.assertTrue(connection.call_args.kwargs["raise_exceptions"])
+
+    def test_authenticate_credentials_propagates_ldap_transport_errors(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        with (
+            mock.patch.object(authproxy, "lookup_user_dn", return_value="uid=alice,dc=example,dc=org"),
+            mock.patch.object(authproxy, "ldap_server", return_value=object()),
+            mock.patch.object(authproxy, "Connection", side_effect=authproxy.LDAPException("connection refused")),
+            self.assertRaises(authproxy.LDAPException),
+        ):
+            authproxy.authenticate_credentials("alice", "secret", config)
 
     def test_proxy_logs_successful_form_authentication(self):
         authproxy = self.load_authproxy()

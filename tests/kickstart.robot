@@ -182,7 +182,9 @@ Check if publishing the dashboard creates the shared route and auth proxy
     Should Be Equal    ${route['lets_encrypt']}    ${False}
 
     # Auth runtime files exist; LDAP settings stay in the auth proxy files only.
-    Execute Command    test -f ${state_dir}/authproxy.env && test -f ${state_dir}/authproxy_secrets.env && test -f ${state_dir}/authproxy_agents.json    return_stdout=False
+    ${auth_files_rc} =    Execute Command    test -f ${state_dir}/authproxy.env && test -f ${state_dir}/authproxy_secrets.env && test -f ${state_dir}/authproxy/agents.json
+    ...    return_rc=True    return_stdout=False
+    Should Be Equal As Integers    ${auth_files_rc}    0    auth proxy runtime files are missing
     ${bind_dn_count} =    Execute Command    grep -c '^LDAP_BIND_DN=' ${state_dir}/authproxy_secrets.env
     Should Be Equal    ${bind_dn_count}    1
     File Should Not Contain LDAP Keys    ${state_dir}/agents/1/agent.env

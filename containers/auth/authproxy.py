@@ -20,7 +20,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
 from ldap3 import NONE, Connection, Server
-from ldap3.core.exceptions import LDAPException
+from ldap3.core.exceptions import LDAPException, LDAPInvalidCredentialsResult
 from ldap3.utils.conv import escape_filter_chars
 from starlette.background import BackgroundTask
 
@@ -367,8 +367,8 @@ def authenticate_credentials(username, password, config):
     """Return True when the password binds as the looked-up user.
 
     Raises LDAPException when the directory cannot be reached or searched, so
-    the caller can report an outage instead of a wrong password. A failed bind
-    (wrong password, locked account) is a plain False.
+    the caller can report an outage instead of a wrong password. Invalid
+    credentials (including a locked account) are a plain False.
     """
     if not username or not password:
         return False
@@ -378,9 +378,15 @@ def authenticate_credentials(username, password, config):
         return False
 
     try:
-        with Connection(ldap_server(config), user=user_dn, password=password, auto_bind=True):
+        with Connection(
+            ldap_server(config),
+            user=user_dn,
+            password=password,
+            auto_bind=True,
+            raise_exceptions=True,
+        ):
             return True
-    except LDAPException:
+    except LDAPInvalidCredentialsResult:
         return False
 
 
