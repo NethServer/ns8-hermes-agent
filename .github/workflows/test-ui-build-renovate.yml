@@ -13,11 +13,21 @@ jobs:
     if: startsWith(github.head_ref, 'renovate-')
 
     env:
-      NODE_OPTIONS: --openssl-legacy-provider
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
+    defaults:
+      run:
+        working-directory: ui
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # The lockfile is Yarn Berry (v4); the version is pinned by the
+      # "packageManager" field in ui/package.json and activated by Corepack.
+      # Enable it before setup-node asks Yarn for its cache directory.
+      - name: Enable Corepack
+        run: corepack enable
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -26,22 +36,13 @@ jobs:
           cache: "yarn"
           cache-dependency-path: "ui/yarn.lock"
 
-      - name: Set Yarn to v1 Classic
-        run: yarn set version classic
-        working-directory: ./ui
-
-      - name: Check Node Version
-        run: node --version
-        working-directory: ./ui
-
-      - name: Check Yarn Version
-        run: yarn --version
-        working-directory: ./ui
+      - name: Check Node and Yarn versions
+        run: |
+          node --version
+          yarn --version
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
-        working-directory: ./ui
+        run: yarn install --immutable
 
       - name: Build application
         run: yarn build
-        working-directory: ./ui

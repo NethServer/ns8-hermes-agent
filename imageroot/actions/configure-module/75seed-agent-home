@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pypkg"))
 from action_logging import log_action_failure
 from hermes_agent_state import AGENTS_HOME_MOUNT_DIR, AGENTS_HOME_VOLUME, HERMES_RUNTIME_HOME
 
-
 PREPARE_HOME_SCRIPT = f'''
 mkdir -p "{AGENTS_HOME_MOUNT_DIR}/${{AGENT_ID}}"
 '''
@@ -19,7 +18,7 @@ mkdir -p "{AGENTS_HOME_MOUNT_DIR}/${{AGENT_ID}}"
 
 # This one-shot container seeds only files that should exist on first boot;
 # later runs must preserve any SOUL.md or .env changes already made in volume.
-SEED_SCRIPT = r'''
+SEED_SCRIPT = r"""
 umask 077
 mkdir -p "$HERMES_HOME"
 
@@ -75,7 +74,7 @@ ensure_safe_target "${HERMES_HOME}/.env"
 if [ ! -e "${HERMES_HOME}/.env" ]; then
   render_template /templates/home.env.in "${HERMES_HOME}/.env" raw
 fi
-'''
+"""
 
 
 def templates_dir():
@@ -151,17 +150,17 @@ def seed_agent_home(agent_id, templates_path):
 
 
 def main():
-  request = json.load(sys.stdin)
-  seed_ids = sorted(agent_data["id"] for agent_data in request.get("agents", []))
-  templates_path = templates_dir()
+    request = json.load(sys.stdin)
+    seed_ids = sorted(agent_data["id"] for agent_data in request.get("agents", []))
+    templates_path = templates_dir()
 
-  for agent_id in seed_ids:
-    seed_agent_home(agent_id, templates_path)
+    for agent_id in seed_ids:
+        seed_agent_home(agent_id, templates_path)
 
 
 if __name__ == "__main__":
-  try:
-    main()
-  except Exception as error:
-    log_action_failure("configure-module/75seed-agent-home", error)
-    raise
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("configure-module/75seed-agent-home", error)
+        raise

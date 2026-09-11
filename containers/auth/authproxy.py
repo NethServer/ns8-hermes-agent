@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import sys
+import time
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from html import escape
@@ -15,11 +17,12 @@ import aiohttp
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from itsdangerous import BadSignature, BadTimeSignature, URLSafeTimedSerializer
-from ldap3 import ALL, Connection, Server
+from ldap3 import NONE, Connection, Server
+from ldap3.core.exceptions import LDAPException, LDAPInvalidCredentialsResult
 from ldap3.utils.conv import escape_filter_chars
-
+from starlette.background import BackgroundTask
 
 SESSION_COOKIE = "hermes_dashboard_session"
 SESSION_TTL_SECONDS = 8 * 60 * 60
@@ -45,6 +48,11 @@ WEBSOCKET_HANDSHAKE_HEADERS = {
     "origin",
 }
 LOGGER = logging.getLogger("hermes.authproxy")
+# Failed form logins per client address and per username inside a sliding
+# window; the next attempt above the limit is rejected before touching LDAP.
+LOGIN_MAX_FAILURES = 5
+LOGIN_FAILURE_WINDOW_SECONDS = 60
+LOGIN_THROTTLE_MAX_KEYS = 10000
 
 
 @dataclass(frozen=True)
@@ -96,6 +104,86 @@ def env_flag(name, default=False):
     return value.lower() in {"1", "true", "yes", "on"}
 
 
+def env_int(name, default):
+    value = env(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+class LoginThrottle:
+    """Sliding-window failure counter for the form login.
+
+    Keys are opaque strings (``ip:<addr>`` and ``user:<name>``). Once a key has
+    ``max_failures`` failures inside ``window_seconds`` further attempts are
+    refused until the oldest failure ages out. State is process-local, which is
+    enough to blunt credential stuffing against a single proxy container.
+    """
+
+    def __init__(
+        self, max_failures=LOGIN_MAX_FAILURES, window_seconds=LOGIN_FAILURE_WINDOW_SECONDS, clock=time.monotonic
+    ):
+        self.max_failures = max(1, int(max_failures))
+        self.window_seconds = max(1, int(window_seconds))
+        self.clock = clock
+        self._failures = {}
+
+    def _prune(self, key, now):
+        failures = self._failures.get(key)
+        if failures is None:
+            return None
+        cutoff = now - self.window_seconds
+        while failures and failures[0] <= cutoff:
+            failures.popleft()
+        if not failures:
+            self._failures.pop(key, None)
+            return None
+        return failures
+
+    def retry_after(self, keys):
+        now = self.clock()
+        longest_wait = 0
+        for key in keys:
+            failures = self._prune(key, now)
+            if failures is not None and len(failures) >= self.max_failures:
+                wait = int(failures[0] + self.window_seconds - now) + 1
+                longest_wait = max(longest_wait, wait)
+        return longest_wait
+
+    def record_failure(self, keys):
+        now = self.clock()
+        for key in keys:
+            failures = self._prune(key, now)
+            if failures is None:
+                if len(self._failures) >= LOGIN_THROTTLE_MAX_KEYS:
+                    # Drop the stalest bucket so a flood of distinct keys cannot
+                    # grow memory without bound.
+                    oldest_key = min(self._failures, key=lambda item: self._failures[item][-1])
+                    self._failures.pop(oldest_key, None)
+                failures = self._failures.setdefault(key, deque())
+            failures.append(now)
+
+    def clear(self, keys):
+        for key in keys:
+            self._failures.pop(key, None)
+
+
+LOGIN_THROTTLE = LoginThrottle(
+    max_failures=env_int("AUTH_PROXY_LOGIN_MAX_FAILURES", LOGIN_MAX_FAILURES),
+    window_seconds=env_int("AUTH_PROXY_LOGIN_WINDOW_SECONDS", LOGIN_FAILURE_WINDOW_SECONDS),
+)
+
+
+def login_throttle_keys(request, username):
+    keys = [f"ip:{client_host(request)}"]
+    if username:
+        keys.append(f"user:{username.lower()}")
+    return keys
+
+
 def configure_logging():
     if LOGGER.handlers:
         return
@@ -112,11 +200,14 @@ def configure_logging():
 configure_logging()
 
 
+DEFAULT_AGENT_REGISTRY = "/app/authproxy/agents.json"
+
+
 def load_agent_registry(path):
-    registry_path = path or "/app/authproxy_agents.json"
+    registry_path = path or DEFAULT_AGENT_REGISTRY
 
     try:
-        with open(registry_path, "r", encoding="utf-8") as registry_file:
+        with open(registry_path, encoding="utf-8") as registry_file:
             payload = json.load(registry_file)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}, {}
@@ -151,7 +242,7 @@ def load_agent_registry(path):
 
 def load_config():
     ldap_port = int(env("LDAP_PORT", "389") or "389")
-    agents_by_id, agents_by_user = load_agent_registry(env("AUTH_PROXY_AGENT_REGISTRY", "/app/authproxy_agents.json"))
+    agents_by_id, agents_by_user = load_agent_registry(env("AUTH_PROXY_AGENT_REGISTRY", DEFAULT_AGENT_REGISTRY))
     return RuntimeConfig(
         user_domain=env("USER_DOMAIN").lower(),
         ldap_host=env("LDAP_HOST"),
@@ -224,7 +315,9 @@ def user_search_filter(username, schema):
 
 
 def ldap_server(config):
-    return Server(config.ldap_host, port=config.ldap_port, use_ssl=config.ldap_port == 636, get_info=ALL)
+    # get_info=NONE: the schema/DSA info fetch is a wasted round trip on every
+    # login; the search and bind below do not need it.
+    return Server(config.ldap_host, port=config.ldap_port, use_ssl=config.ldap_port == 636, get_info=NONE)
 
 
 @asynccontextmanager
@@ -271,6 +364,12 @@ def lookup_user_dn(username, config):
 
 
 def authenticate_credentials(username, password, config):
+    """Return True when the password binds as the looked-up user.
+
+    Raises LDAPException when the directory cannot be reached or searched, so
+    the caller can report an outage instead of a wrong password. Invalid
+    credentials (including a locked account) are a plain False.
+    """
     if not username or not password:
         return False
 
@@ -279,9 +378,15 @@ def authenticate_credentials(username, password, config):
         return False
 
     try:
-        with Connection(ldap_server(config), user=user_dn, password=password, auto_bind=True):
+        with Connection(
+            ldap_server(config),
+            user=user_dn,
+            password=password,
+            auto_bind=True,
+            raise_exceptions=True,
+        ):
             return True
-    except Exception:
+    except LDAPInvalidCredentialsResult:
         return False
 
 
@@ -304,9 +409,19 @@ def request_path(request):
 
 
 def normalize_next_path(candidate, fallback="/"):
-    value = normalized_path(candidate or fallback)
-    if value.startswith("//"):
+    """Only ever redirect to a same-origin path.
+
+    Browsers turn ``/\\evil.example`` into a scheme-relative URL, and control
+    characters could split headers, so anything that is not a plain absolute
+    path on this host falls back to ``fallback``.
+    """
+    raw_value = str(candidate or fallback)
+    if "\\" in raw_value or any(ord(char) < 32 or ord(char) == 127 for char in raw_value):
         return fallback
+    parsed = urlsplit(raw_value)
+    if parsed.scheme or parsed.netloc or raw_value.startswith("//"):
+        return fallback
+    value = normalized_path(raw_value)
     if value in {LOGIN_PATH, LOGOUT_PATH}:
         return fallback
     if target_agent_id(value) is not None:
@@ -404,16 +519,27 @@ def configuration_required_response():
     return HTMLResponse(html, status_code=503, headers={"Cache-Control": "no-store"})
 
 
-def login_form_response(config, request, error_message="", username="", explicit_agent_id=None, next_path="/"):
+def login_form_response(
+    config,
+    request,
+    error_message="",
+    username="",
+    explicit_agent_id=None,
+    next_path="/",
+    status_code=None,
+    extra_headers=None,
+):
     target_record = config.agents_by_id.get(explicit_agent_id) if explicit_agent_id is not None else None
     title = target_record.display_name if target_record is not None else "Hermes dashboard login"
-    heading = f"Sign in to {target_record.display_name}" if target_record is not None else "Sign in to your Hermes dashboard"
+    heading = (
+        f"Sign in to {target_record.display_name}" if target_record is not None else "Sign in to your Hermes dashboard"
+    )
     helper = (
         f"Authenticate to access {target_record.display_name}."
         if target_record is not None
         else "Authenticate with your assigned account to access the dashboard routed to your session."
     )
-    error_html = f"<p class=\"error\">{escape(error_message)}</p>" if error_message else ""
+    error_html = f'<p class="error">{escape(error_message)}</p>' if error_message else ""
     action_path = request_path(request) if explicit_agent_id is not None else LOGIN_PATH
     html = f"""<!doctype html>
 <html lang=\"en\">
@@ -494,7 +620,12 @@ def login_form_response(config, request, error_message="", username="", explicit
   </body>
 </html>
 """
-    return HTMLResponse(html, status_code=401 if error_message else 200, headers={"Cache-Control": "no-store"})
+    if status_code is None:
+        status_code = 401 if error_message else 200
+    headers = {"Cache-Control": "no-store"}
+    if extra_headers:
+        headers.update(extra_headers)
+    return HTMLResponse(html, status_code=status_code, headers=headers)
 
 
 def status_page_response(session_data, current_path):
@@ -549,7 +680,7 @@ def status_page_response(session_data, current_path):
   <body>
     <main>
       <h1>Signed in to {escape(agent_record.display_name)}</h1>
-      <p>Authenticated as <code>{escape(session_data['username'])}</code>.</p>
+      <p>Authenticated as <code>{escape(session_data["username"])}</code>.</p>
       <p>{escape(helper)}</p>
       <div class=\"actions\">
         <a href=\"/\">Open dashboard</a>
@@ -613,11 +744,7 @@ def upstream_headers(request, authenticated_username=""):
             continue
         forwarded_headers[name] = value
 
-    filtered_cookies = [
-        f"{name}={value}"
-        for name, value in request.cookies.items()
-        if name != SESSION_COOKIE
-    ]
+    filtered_cookies = [f"{name}={value}" for name, value in request.cookies.items() if name != SESSION_COOKIE]
     if filtered_cookies:
         forwarded_headers["Cookie"] = "; ".join(filtered_cookies)
 
@@ -635,17 +762,17 @@ def upstream_websocket_headers(request, authenticated_username=""):
     forwarded_headers = {}
     for name, value in request.headers.items():
         lower_name = name.lower()
-        if lower_name in HOP_BY_HOP_HEADERS or lower_name in WEBSOCKET_HANDSHAKE_HEADERS or lower_name in {"host", "authorization", AUTHENTICATED_USER_HEADER.lower()}:
+        if (
+            lower_name in HOP_BY_HOP_HEADERS
+            or lower_name in WEBSOCKET_HANDSHAKE_HEADERS
+            or lower_name in {"host", "authorization", AUTHENTICATED_USER_HEADER.lower()}
+        ):
             continue
         if lower_name == "cookie":
             continue
         forwarded_headers[name] = value
 
-    filtered_cookies = [
-        f"{name}={value}"
-        for name, value in request.cookies.items()
-        if name != SESSION_COOKIE
-    ]
+    filtered_cookies = [f"{name}={value}" for name, value in request.cookies.items() if name != SESSION_COOKIE]
     if filtered_cookies:
         forwarded_headers["Cookie"] = "; ".join(filtered_cookies)
 
@@ -736,6 +863,12 @@ def upstream_websocket_client_for_agent(request, agent_record):
     return client
 
 
+async def open_upstream_response(upstream_client, method, url, headers, content):
+    """Send the request and return the response with its body still open."""
+    upstream_request = upstream_client.build_request(method, url, headers=headers, content=content)
+    return await upstream_client.send(upstream_request, stream=True)
+
+
 async def proxy_to_agent(agent_record, request, authenticated_username=""):
     upstream_url = upstream_request_url(agent_record, request)
     upstream_client = upstream_client_for_agent(request, agent_record)
@@ -748,11 +881,12 @@ async def proxy_to_agent(agent_record, request, authenticated_username=""):
     )
 
     try:
-        upstream_response = await upstream_client.request(
-            method=request.method,
-            url=upstream_url,
-            headers=upstream_headers(request, authenticated_username=authenticated_username),
-            content=await request.body(),
+        upstream_response = await open_upstream_response(
+            upstream_client,
+            request.method,
+            upstream_url,
+            upstream_headers(request, authenticated_username=authenticated_username),
+            await request.body(),
         )
     except httpx.RequestError as exc:
         log_auth_event(
@@ -763,10 +897,14 @@ async def proxy_to_agent(agent_record, request, authenticated_username=""):
         )
         return upstream_unavailable_response()
 
-    return Response(
-        content=upstream_response.content,
+    # Stream the body through instead of buffering it: dashboards use
+    # server-sent events and file downloads that would otherwise stall until
+    # the upstream closed the connection or the 60 s timeout hit.
+    return StreamingResponse(
+        upstream_response.aiter_raw(),
         status_code=upstream_response.status_code,
         headers=response_headers(upstream_response, agent_record.upstream_origin),
+        background=BackgroundTask(upstream_response.aclose),
     )
 
 
@@ -882,7 +1020,17 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 
 @app.get("/health")
 async def health():
-    return JSONResponse({"status": "ok"})
+    # Always 200 so unit/robot readiness probes see the process is up; the
+    # payload says whether logins can currently succeed.
+    config = load_config()
+    return JSONResponse(
+        {
+            "status": "ok",
+            "configured": configuration_complete(config),
+            "agents": len(config.agents_by_id),
+            "running_agents": sum(1 for record in config.agents_by_id.values() if record.status == "start"),
+        }
+    )
 
 
 @app.get("/api/auth/me")
@@ -908,10 +1056,13 @@ async def auth_me(request: Request):
         )
 
     username = session_data["username"]
-    return JSONResponse({
-        "user_id": username,
-        "display_name": username,
-    }, status_code=200)
+    return JSONResponse(
+        {
+            "user_id": username,
+            "display_name": username,
+        },
+        status_code=200,
+    )
 
 
 @app.post(LOGOUT_PATH)
@@ -1003,8 +1154,54 @@ async def proxy(path: str, request: Request):
             auth_method="form",
         )
 
+        throttle_keys = login_throttle_keys(request, username)
+        retry_after = LOGIN_THROTTLE.retry_after(throttle_keys)
+        if retry_after > 0:
+            log_auth_event(
+                "auth_failed",
+                request,
+                agent_id=str(explicit_agent or ""),
+                username=username,
+                auth_method="form",
+                detail=f"rate_limited retry_after={retry_after}",
+            )
+            return login_form_response(
+                config,
+                request,
+                error_message=f"Too many failed sign-in attempts. Try again in {retry_after} seconds.",
+                username=username,
+                explicit_agent_id=explicit_agent,
+                next_path=next_path,
+                status_code=429,
+                extra_headers={"Retry-After": str(retry_after)},
+            )
+
         target_record = login_target_agent(config, username, explicit_agent_id=explicit_agent)
-        if target_record is None or not authenticate_credentials(username, password, config):
+        # Always verify the password, even for unassigned accounts, so response
+        # timing does not reveal which usernames have a dashboard.
+        try:
+            authenticated = authenticate_credentials(username, password, config)
+        except LDAPException as exc:
+            log_auth_event(
+                "auth_failed",
+                request,
+                agent_id=str(explicit_agent or ""),
+                username=username,
+                auth_method="form",
+                detail=f"ldap_unavailable {exc.__class__.__name__}",
+            )
+            return login_form_response(
+                config,
+                request,
+                error_message="The directory service is temporarily unavailable. Try again in a moment.",
+                username=username,
+                explicit_agent_id=explicit_agent,
+                next_path=next_path,
+                status_code=503,
+                extra_headers={"Retry-After": "30"},
+            )
+        if target_record is None or not authenticated:
+            LOGIN_THROTTLE.record_failure(throttle_keys)
             log_auth_event(
                 "auth_failed",
                 request,
@@ -1022,6 +1219,7 @@ async def proxy(path: str, request: Request):
                 next_path=next_path,
             )
 
+        LOGIN_THROTTLE.clear(throttle_keys)
         response = RedirectResponse(next_path, status_code=303)
         response.set_cookie(
             SESSION_COOKIE,
@@ -1084,9 +1282,19 @@ async def proxy(path: str, request: Request):
     )
 
 
-if __name__ == "__main__":
+def run_server():
+    # The listener is published on the node loopback only and every request
+    # arrives through Traefik, so trust X-Forwarded-For/-Proto from any peer.
+    # Without this, request.client is the slirp4netns gateway address and the
+    # audit log cannot tell clients apart.
     uvicorn.run(
         app,
         host=env("AUTH_PROXY_HOST", "0.0.0.0"),
-        port=int(env("AUTH_PROXY_PORT", "9119") or "9119"),
+        port=env_int("AUTH_PROXY_PORT", 9119),
+        proxy_headers=True,
+        forwarded_allow_ips="*",
     )
+
+
+if __name__ == "__main__":
+    run_server()

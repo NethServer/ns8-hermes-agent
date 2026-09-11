@@ -1,9 +1,9 @@
-robotframework==4.1.2
+# Robot Framework runner dependencies for test-module.sh. Pinned to current
+# releases; the suite uses only SSHLibrary and BuiltIn keywords.
+robotframework==7.4.2
 robotframework-sshlibrary==3.8.0
-bcrypt==3.2.0
-cffi==1.15.0
-cryptography==36.0.1
-paramiko==2.9.2
-pycparser==2.21
-pynacl==1.5.0
-scp==0.14.2
+paramiko==5.0.0
+cryptography==50.0.1
+bcrypt==5.0.0
+pynacl==1.6.2
+scp==0.16.1

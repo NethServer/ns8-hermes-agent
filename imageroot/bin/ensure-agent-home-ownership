@@ -5,8 +5,7 @@ import os
 import subprocess
 import sys
 
-
-OWNERSHIP_SCRIPT = r'''
+OWNERSHIP_SCRIPT = r"""
 uid="$(id -u hermes)"
 gid="$(id -g hermes)"
 desired_owner="${uid}:${gid}"
@@ -33,7 +32,8 @@ if [ "$current_owner" != "$desired_owner" ] || [ "$top_owner" != "$desired_owner
   printf '%s\n' "$desired_owner" > "$marker"
   chown "$uid:$gid" "$marker"
 fi
-'''
+"""
+
 
 def ensure_agent_home_ownership(agent_id):
     image = os.environ.get("HERMES_AGENT_HERMES_IMAGE")
@@ -52,9 +52,10 @@ def ensure_agent_home_ownership(agent_id):
         "root",
         "--entrypoint",
         "/bin/sh",
-        "--env", f"AGENT_ID={agent_id}",
+        "--env",
+        f"AGENT_ID={agent_id}",
         "--volume",
-        f"hermes-agents-home:/opt/agents:z",
+        "hermes-agents-home:/opt/agents:z",
         image,
         "-eu",
         "-c",

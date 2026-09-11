@@ -339,7 +339,7 @@ export default {
   mounted() {
     this.redirectTimeout = setTimeout(
       () => (this.isRedirectChecked = true),
-      200
+      200,
     );
   },
   beforeUnmount() {
@@ -359,13 +359,13 @@ export default {
       // register to task error
       this.core.$root.$once(
         `${taskAction}-aborted-${eventId}`,
-        this.getStatusAborted
+        this.getStatusAborted,
       );
 
       // register to task completion
       this.core.$root.$once(
         `${taskAction}-completed-${eventId}`,
-        this.getStatusCompleted
+        this.getStatusCompleted,
       );
 
       const res = await to(
@@ -376,7 +376,7 @@ export default {
             isNotificationHidden: true,
             eventId,
           },
-        })
+        }),
       );
       const err = res[0];
 
@@ -405,13 +405,13 @@ export default {
       // register to task error
       this.core.$root.$once(
         `${taskAction}-aborted-${eventId}`,
-        this.listBackupRepositoriesAborted
+        this.listBackupRepositoriesAborted,
       );
 
       // register to task completion
       this.core.$root.$once(
         `${taskAction}-completed-${eventId}`,
-        this.listBackupRepositoriesCompleted
+        this.listBackupRepositoriesCompleted,
       );
 
       const res = await to(
@@ -422,7 +422,7 @@ export default {
             isNotificationHidden: true,
             eventId,
           },
-        })
+        }),
       );
       const err = res[0];
 
@@ -440,7 +440,7 @@ export default {
     },
     listBackupRepositoriesCompleted(taskContext, taskResult) {
       let backupRepositories = taskResult.output.repositories.sort(
-        this.sortByProperty("name")
+        this.sortByProperty("name"),
       );
       this.backupRepositories = backupRepositories;
       this.loading.listBackupRepositories = false;
@@ -455,13 +455,13 @@ export default {
       // register to task error
       this.core.$root.$once(
         `${taskAction}-aborted-${eventId}`,
-        this.listBackupsAborted
+        this.listBackupsAborted,
       );
 
       // register to task completion
       this.core.$root.$once(
         `${taskAction}-completed-${eventId}`,
-        this.listBackupsCompleted
+        this.listBackupsCompleted,
       );
 
       const res = await to(
@@ -472,7 +472,7 @@ export default {
             isNotificationHidden: true,
             eventId,
           },
-        })
+        }),
       );
       const err = res[0];
 
@@ -495,7 +495,7 @@ export default {
       // get repository name
       for (const backup of backups) {
         const repo = this.backupRepositories.find(
-          (r) => r.id == backup.repository
+          (r) => r.id == backup.repository,
         );
 
         if (repo) {

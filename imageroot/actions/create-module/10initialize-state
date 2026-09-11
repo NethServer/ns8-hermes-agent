@@ -17,7 +17,7 @@ def ensure_private_file(path):
     file_path = Path(path)
 
     try:
-        file_stat = file_path.lstat()
+        file_path.lstat()
     except FileNotFoundError:
         file_path.touch(mode=0o600)
     else:

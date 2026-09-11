@@ -9,7 +9,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
 
-from hermes_agent_state import AGENT_DASHBOARD_SOCKETS_DIR, AGENTS_HOME_VOLUME, MAX_AGENTS, SECRETS_DIR, agent_dashboard_socket_name
+from hermes_agent_state import (
+    AGENT_DASHBOARD_SOCKETS_DIR,
+    AGENTS_HOME_VOLUME,
+    MAX_AGENTS,
+    SECRETS_DIR,
+    agent_dashboard_socket_name,
+)
 
 
 def parse_agent_id(value):
@@ -33,16 +39,22 @@ def remove_agent_home_subdir(agent_id):
 
     subprocess.run(
         [
-            "podman", "run",
+            "podman",
+            "run",
             "--rm",
             "--replace",
-            "--name", f"hermes-agent-cleanup-{agent_id}",
+            "--name",
+            f"hermes-agent-cleanup-{agent_id}",
             "--network=none",
-            "--user", "root",
-            "--entrypoint", "/bin/sh",
-            "--volume", f"{AGENTS_HOME_VOLUME}:/opt/agents:z",
+            "--user",
+            "root",
+            "--entrypoint",
+            "/bin/sh",
+            "--volume",
+            f"{AGENTS_HOME_VOLUME}:/opt/agents:z",
             image,
-            "-c", f"rm -rf /opt/agents/{agent_id}",
+            "-c",
+            f"rm -rf /opt/agents/{agent_id}",
         ],
         check=True,
     )

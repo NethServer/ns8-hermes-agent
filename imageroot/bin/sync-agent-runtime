@@ -11,16 +11,17 @@ import agent
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pypkg"))
 
 from hermes_agent_state import (
-    AGENT_SECRET_KEY,
     AGENT_ALLOWED_USER_ENV,
-    AGENTS_DIR,
     AGENT_PUBLIC_ENVFILE,
+    AGENT_SECRET_KEY,
+    AGENTS_DIR,
     API_SERVER_SECRET_KEY,
     AUTH_SESSION_SECRET_KEY,
     AUTHPROXY_AGENTS_FILE,
     AUTHPROXY_ENVFILE,
     AUTHPROXY_SECRETS_ENVFILE,
     BASE_VIRTUALHOST_ENV,
+    LEGACY_AUTHPROXY_AGENTS_FILE,
     SECRETS_DIR,
     SHARED_SECRETS_ENVFILE,
     SMTP_PUBLIC_KEYS,
@@ -28,7 +29,7 @@ from hermes_agent_state import (
     USER_DOMAIN_ENV,
     agent_dashboard_socket_path,
     ensure_private_directory,
-    read_agents_from_state,
+    read_agent_state_report,
     write_jsonfile,
 )
 from hermes_user_domain import public_runtime_env, secrets_runtime_env
@@ -53,8 +54,19 @@ def read_optional_envfile(path):
     return agent.read_envfile(path)
 
 
-def agent_by_id(agent_id):
-    for agent_data in read_agents_from_state():
+def read_valid_agents():
+    # A corrupt sibling must not stop this agent's unit from starting; report
+    # the broken directories on stderr and carry on with the healthy set.
+    report = read_agent_state_report()
+    for entry in report["invalid"]:
+        print(f"sync-agent-runtime: ignoring agents/{entry['directory']}: {entry['error']}", file=sys.stderr)
+    return report["agents"]
+
+
+def agent_by_id(agent_id, agent_data_list=None):
+    if agent_data_list is None:
+        agent_data_list = read_valid_agents()
+    for agent_data in agent_data_list:
         if agent_data["id"] == agent_id:
             return agent_data
 
@@ -92,9 +104,11 @@ def build_agent_public_env(agent_data, shared_environment):
     if allowed_user:
         env_data[AGENT_ALLOWED_USER_ENV] = allowed_user
 
+    # Only the shared auth proxy talks to LDAP. Agents get the domain name for
+    # display purposes and nothing that would let them reach the directory.
     user_domain = (shared_environment.get(USER_DOMAIN_ENV) or "").strip().lower()
     if user_domain:
-        env_data.update(public_runtime_env(user_domain))
+        env_data[USER_DOMAIN_ENV] = user_domain
 
     for key in SMTP_PUBLIC_KEYS:
         value = shared_environment.get(key)
@@ -111,7 +125,8 @@ def build_agent_secrets(
     reserved_api_server_keys=None,
 ):
     # Preserve each agent secret across regenerations while still projecting the
-    # current module-wide SMTP and LDAP bind credentials into the private file.
+    # current module-wide SMTP password into the private file. LDAP bind
+    # credentials are deliberately never handed to agent containers.
     if reserved_api_server_keys is None:
         reserved_api_server_keys = set()
 
@@ -130,10 +145,6 @@ def build_agent_secrets(
     smtp_password = shared_secrets.get(SMTP_SECRET_KEY)
     if smtp_password:
         env_data[SMTP_SECRET_KEY] = smtp_password
-
-    user_domain = (shared_environment.get(USER_DOMAIN_ENV) or "").strip().lower()
-    if user_domain:
-        env_data.update(secrets_runtime_env(user_domain))
 
     return env_data
 
@@ -175,10 +186,10 @@ def build_authproxy_secrets(shared_secrets, shared_environment):
     return env_data
 
 
-def build_authproxy_agents(shared_environment):
+def build_authproxy_agents(agent_data_list):
     agent_records = []
 
-    for agent_data in read_agents_from_state():
+    for agent_data in agent_data_list:
         allowed_user = (agent_data.get("allowed_user") or "").strip()
         if not allowed_user:
             continue
@@ -199,13 +210,15 @@ def build_authproxy_agents(shared_environment):
 def sync_agent_runtime_files(agent_id=None):
     shared_environment = agent.read_envfile("environment")
     shared_secrets = ensure_shared_session_secret(agent.read_envfile(SHARED_SECRETS_ENVFILE))
-    all_agent_data = read_agents_from_state()
-    agent_data_list = [agent_by_id(agent_id)] if agent_id is not None else all_agent_data
+    all_agent_data = read_valid_agents()
+    agent_data_list = [agent_by_id(agent_id, all_agent_data)] if agent_id is not None else all_agent_data
     known_api_server_keys = existing_agent_api_server_keys(all_agent_data)
 
     agent.write_envfile(AUTHPROXY_ENVFILE, build_authproxy_env(shared_environment))
     agent.write_envfile(AUTHPROXY_SECRETS_ENVFILE, build_authproxy_secrets(shared_secrets, shared_environment))
-    write_jsonfile(AUTHPROXY_AGENTS_FILE, build_authproxy_agents(shared_environment))
+    write_jsonfile(AUTHPROXY_AGENTS_FILE, build_authproxy_agents(all_agent_data))
+    if LEGACY_AUTHPROXY_AGENTS_FILE.is_file():
+        LEGACY_AUTHPROXY_AGENTS_FILE.unlink()
 
     ensure_private_directory(SECRETS_DIR)
     for agent_data in agent_data_list:

@@ -1,0 +1,36 @@
+name: Integration test (pull request)
+
+# Opt-in end-to-end run of tests/kickstart.robot for a pull request: add the
+# "integration-test" label. Images are built and pushed to ghcr.io under a
+# pr-<number> tag, then a disposable NS8 node is created on DigitalOcean.
+# Fork PRs cannot push packages and are skipped.
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-images:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'integration-test') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/build-images.yml
+    with:
+      imagetag: pr-${{ github.event.pull_request.number }}
+
+  module:
+    needs: build-images
+    uses: NethServer/ns8-github-actions/.github/workflows/module-info.yml@v1
+
+  run_tests:
+    needs: [build-images, module]
+    uses: ./.github/workflows/test-on-digitalocean-infra.yml
+    with:
+      args: "ghcr.io/${{ needs.module.outputs.owner }}/${{ needs.module.outputs.name }}:pr-${{ github.event.pull_request.number }}"
+      repo_ref: ${{ github.event.pull_request.head.sha }}
+      leader_nodes: "rl1"
+    secrets: inherit
