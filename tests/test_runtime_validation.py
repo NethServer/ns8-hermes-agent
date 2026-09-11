@@ -1954,6 +1954,8 @@ class HermesModuleStateTest(unittest.TestCase):
         kickstart = KICKSTART_PATH.read_text(encoding="utf-8")
         self.assertIn("runagent -m ${module_id} sh -lc", kickstart)
         self.assertNotIn("runuser -u", kickstart)
+        self.assertEqual(kickstart.count(r"-w '\%{http_code}'"), 5)
+        self.assertNotIn("-w '%{http_code}'", kickstart)
 
     def test_smarthost_changed_event_restarts_active_primary_units(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):

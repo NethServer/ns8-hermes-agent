@@ -192,13 +192,13 @@ Check if publishing the dashboard creates the shared route and auth proxy
 
     # Login flow through the loopback listener Traefik forwards to.
     Execute Command    rm -f ${COOKIE_JAR}
-    ${form_status} =    Execute Command    curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${tcp_port}/login
+    ${form_status} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' http://127.0.0.1:${tcp_port}/login
     Should Be Equal    ${form_status}    200
-    ${anonymous_me} =    Execute Command    curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${tcp_port}/api/auth/me
+    ${anonymous_me} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' http://127.0.0.1:${tcp_port}/api/auth/me
     Should Be Equal    ${anonymous_me}    401
-    ${bad_login} =    Execute Command    curl -s -o /dev/null -w '%{http_code}' -X POST --data-urlencode 'username=${ALLOWED_USER}' --data-urlencode 'password=wrong-password' --data-urlencode 'next=/' http://127.0.0.1:${tcp_port}/login
+    ${bad_login} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' -X POST --data-urlencode 'username=${ALLOWED_USER}' --data-urlencode 'password=wrong-password' --data-urlencode 'next=/' http://127.0.0.1:${tcp_port}/login
     Should Be Equal    ${bad_login}    401
-    ${good_login} =    Execute Command    curl -s -o /dev/null -w '%{http_code}' -c ${COOKIE_JAR} -X POST --data-urlencode 'username=${ALLOWED_USER}' --data-urlencode 'password=${USER_PASSWORD}' --data-urlencode 'next=/' http://127.0.0.1:${tcp_port}/login
+    ${good_login} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' -c ${COOKIE_JAR} -X POST --data-urlencode 'username=${ALLOWED_USER}' --data-urlencode 'password=${USER_PASSWORD}' --data-urlencode 'next=/' http://127.0.0.1:${tcp_port}/login
     Should Be Equal    ${good_login}    303
     ${me_output} =    Execute Command    curl -s -b ${COOKIE_JAR} http://127.0.0.1:${tcp_port}/api/auth/me
     ${me} =    Evaluate    json.loads(r'''${me_output}''')    json
@@ -223,7 +223,7 @@ Check if stopped agent disables runtime but keeps files
     Execute Command    test -f ${state_dir}/agents/1/metadata.json && test -f ${state_dir}/agents/1/agent.env && test -f ${state_dir}/secrets/1.env    return_stdout=False
     Agent Home Subdir Should Exist    1
     # A stopped agent has no login target: authentication must be refused.
-    ${stopped_login} =    Execute Command    curl -s -o /dev/null -w '%{http_code}' -X POST --data-urlencode 'username=${ALLOWED_USER}' --data-urlencode 'password=${USER_PASSWORD}' --data-urlencode 'next=/' http://127.0.0.1:${tcp_port}/login
+    ${stopped_login} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' -X POST --data-urlencode 'username=${ALLOWED_USER}' --data-urlencode 'password=${USER_PASSWORD}' --data-urlencode 'next=/' http://127.0.0.1:${tcp_port}/login
     Should Be Equal    ${stopped_login}    401
 
 Check if deleting agent cleans runtime files
