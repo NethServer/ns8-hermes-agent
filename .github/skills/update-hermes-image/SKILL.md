@@ -23,7 +23,7 @@ Always update these files together:
 
 After choosing the new image, inspect these files for assumptions that may need follow-up edits if the upstream image layout changed:
 
-- `containers/hermes/Containerfile` (the wrapper keeps the upstream `/init` entrypoint; there is no custom entrypoint script)
+- `containers/hermes/Containerfile` (the wrapper inherits the upstream dispatcher entrypoint; under the normal PID-1 container runtime, the dispatcher executes `/init` to retain s6-overlay supervision)
 - `imageroot/bin/ensure-agent-home-ownership`
 - `imageroot/actions/configure-module/75seed-agent-home`
 

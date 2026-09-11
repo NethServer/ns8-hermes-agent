@@ -30,6 +30,11 @@ BUILD_IMAGES_PATH = ROOT / "build-images.sh"
 BUILD_IMAGES_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "build-images.yml"
 PUBLISH_IMAGES_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "publish-images.yml"
 CREATE_TESTING_RELEASE_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "create-testing-release.yml"
+TEST_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "test.yml"
+RENOVATE_UI_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "test-ui-build-renovate.yml"
+DIGITALOCEAN_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "test-on-digitalocean-infra.yml"
+TEST_MODULE_PATH = ROOT / "test-module.sh"
+KICKSTART_PATH = ROOT / "tests" / "kickstart.robot"
 CREATE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "create-module"
 CONFIGURE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "configure-module"
 DESTROY_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "destroy-module"
@@ -1835,8 +1840,11 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.7.30", containerfile)
-        self.assertIn("RUN cd /opt/hermes && npx agent-browser install --with-deps", containerfile)
+        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.9.7", containerfile)
+        self.assertIn(
+            "RUN cd /opt/hermes && npx --yes agent-browser@0.35.1 install --with-deps",
+            containerfile,
+        )
         self.assertIn("edge-tts==7.2.7", containerfile)
         self.assertIn("lark-oapi==1.5.3", containerfile)
         self.assertIn("qrcode==7.4.2", containerfile)
@@ -1855,7 +1863,10 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertNotIn('ENTRYPOINT [ "/entrypoint.sh" ]', containerfile)
         self.assertNotIn("USER hermes", containerfile)
         self.assertIn("USER root", containerfile)
-        self.assertIn("/init", containerfile)
+        self.assertFalse(
+            any(line.lstrip().startswith("ENTRYPOINT") for line in containerfile.splitlines()),
+            "the wrapper must inherit the upstream entrypoint",
+        )
         self.assertIn("COPY favicon.ico /tmp/favicon.ico", containerfile)
         self.assertIn("/opt/hermes/hermes_cli/web_dist/favicon.ico", containerfile)
         self.assertIn("/opt/hermes/web/public/favicon.ico", containerfile)
@@ -1925,6 +1936,24 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("NS8_MODULE_RELEASES_TOKEN", workflow)
         self.assertIn("gh extension install NethServer/gh-ns8-release-module", workflow)
         self.assertIn("gh ns8-release-module create --repo ${{ github.repository }} --testing", workflow)
+
+    def test_ci_harness_supports_yarn4_and_current_ns8(self):
+        for workflow_path in (TEST_WORKFLOW_PATH, RENOVATE_UI_WORKFLOW_PATH):
+            workflow = workflow_path.read_text(encoding="utf-8")
+            self.assertLess(workflow.index("run: corepack enable"), workflow.index("uses: actions/setup-node@v4"))
+
+        digitalocean_workflow = DIGITALOCEAN_WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertNotIn(
+            "${{ github.workspace }}/module/${{ inputs.path }}/tests/outputs/",
+            digitalocean_workflow,
+        )
+
+        runner = TEST_MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn("rfbrowser-stable:v20.4.0", runner)
+
+        kickstart = KICKSTART_PATH.read_text(encoding="utf-8")
+        self.assertIn("runagent -m ${module_id} sh -lc", kickstart)
+        self.assertNotIn("runuser -u", kickstart)
 
     def test_smarthost_changed_event_restarts_active_primary_units(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):

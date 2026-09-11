@@ -28,7 +28,7 @@ Module Action Should Fail
 
 Run As Module User
     [Arguments]    ${command}
-    ${output}    ${rc} =    Execute Command    runuser -u ${module_id} -- bash -lc '${command}'
+    ${output}    ${rc} =    Execute Command    runagent -m ${module_id} sh -lc '${command}'
     ...    return_rc=True
     [Return]    ${output}    ${rc}
 

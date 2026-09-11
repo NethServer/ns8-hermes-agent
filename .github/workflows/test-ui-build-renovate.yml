@@ -23,17 +23,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # The lockfile is Yarn Berry (v4); the version is pinned by the
+      # "packageManager" field in ui/package.json and activated by Corepack.
+      # Enable it before setup-node asks Yarn for its cache directory.
+      - name: Enable Corepack
+        run: corepack enable
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: "yarn"
           cache-dependency-path: "ui/yarn.lock"
-
-      # The lockfile is Yarn Berry (v4); the version is pinned by the
-      # "packageManager" field in ui/package.json and activated by Corepack.
-      - name: Enable Corepack
-        run: corepack enable
 
       - name: Check Node and Yarn versions
         run: |

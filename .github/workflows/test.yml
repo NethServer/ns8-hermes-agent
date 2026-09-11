@@ -46,14 +46,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Enable Corepack (Yarn 4 from package.json)
+        run: corepack enable
+
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: yarn
           cache-dependency-path: ui/yarn.lock
-
-      - name: Enable Corepack (Yarn 4 from package.json)
-        run: corepack enable
 
       - name: Install dependencies
         run: yarn install --immutable

@@ -1,4 +1,4 @@
-FROM docker.io/nousresearch/hermes-agent:v2026.7.30
+FROM docker.io/nousresearch/hermes-agent:v2026.9.7
 LABEL org.opencontainers.image.title="hermes-agent-hermes"
 LABEL org.opencontainers.image.description="Thin wrapper around the upstream Hermes runtime image"
 
@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pip \
     python3-googleapi \
     python3-google-auth-oauthlib \
+    sudo \
     vim
 
 # Every runtime dependency is pinned so the same tag rebuilds the same image.
@@ -27,7 +28,7 @@ RUN pip install --no-cache-dir --break-system-packages \
     pdf2image==1.17.0 \
     qrcode==7.4.2
 
-RUN cd /opt/hermes && npx agent-browser install --with-deps
+RUN cd /opt/hermes && npx --yes agent-browser@0.35.1 install --with-deps
 
 RUN cd /opt/hermes/web && npm install && npm run build
 COPY favicon.ico /tmp/favicon.ico
@@ -39,9 +40,9 @@ RUN cd && npm install -g @qwen-code/qwen-code@0.23.2
 
 RUN apt-get clean autoclean && apt-get autoremove --yes && rm -rf /var/lib/{apt,dpkg,cache,log}/* && touch /var/lib/dpkg/status
 
-# Preserve the upstream s6 runtime contract:
-# - /init must remain PID 1 via the inherited ENTRYPOINT
-# - cont-init runs as root and later drops supervised Hermes processes to the hermes user
+# Preserve the upstream dispatcher and s6 runtime contract by inheriting its
+# ENTRYPOINT. The dispatcher execs /init for the normal container runtime, and
+# cont-init runs as root before dropping supervised Hermes processes to hermes.
 RUN chown -R root:root /opt/hermes \
     && chmod -R a+rX /opt/hermes \
     && chmod -R a-w /opt/hermes \
