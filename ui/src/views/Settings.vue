@@ -377,6 +377,8 @@
 <script>
 import to from "await-to-js";
 import { mapState } from "vuex";
+import Play20 from "@carbon/icons-vue/es/play/20";
+import Stop20 from "@carbon/icons-vue/es/stop/20";
 import {
   QueryParamService,
   UtilService,
@@ -435,6 +437,8 @@ export default {
   },
   data() {
     return {
+      Play20,
+      Stop20,
       q: {
         page: "settings",
       },
