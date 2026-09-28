@@ -1840,7 +1840,7 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.9.7", containerfile)
+        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.9.24", containerfile)
         self.assertIn(
             "RUN cd /opt/hermes && npx --yes agent-browser@0.35.1 install --with-deps",
             containerfile,
