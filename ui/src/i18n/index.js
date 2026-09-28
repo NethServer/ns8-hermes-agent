@@ -7,7 +7,7 @@ export async function loadLanguage(lang) {
   } catch (error) {
     console.warn(
       `Cannot import ${lang} language messages, falling back to English.`,
-      error
+      error,
     );
 
     // fallback to english

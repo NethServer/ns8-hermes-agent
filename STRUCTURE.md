@@ -13,9 +13,10 @@ This document maps the current layout.
 - `build-images.sh`: builds the module image plus the auth proxy, Hermes wrapper, and socket relay component images.
 - `test-module.sh`: runs the module test suite.
 - `renovate.json`: Renovate configuration.
+- `ruff.toml`: Python lint/format baseline covering `imageroot/`, `containers/auth/` and `tests/`.
 - `.github/`: custom Copilot agents, repository skills, and GitHub Actions workflows.
 
-There is no `.devcontainer/` directory in the current tree.
+`.devcontainer/devcontainer.json` builds the UI development container from `ui/Containerfile` for VS Code; it is optional tooling and not part of the module image.
 
 ## `imageroot/`
 
@@ -33,10 +34,11 @@ There is no `state-exclude.conf` because the current backup scope is explicit an
 
 - `state/environment`: shared non-secret module environment, including core-managed image references and the reserved `TCP_PORT`.
 - `state/secrets/shared.env`: module-wide secrets such as shared SMTP and auth proxy private values.
-- `state/secrets/<id>.env`: generated per-agent Hermes secrets, including `API_SERVER_KEY` and LDAP bind values when a user domain is configured.
+- `state/secrets/<id>.env`: generated per-agent Hermes secrets, including `API_SERVER_KEY` and the shared `SMTP_PASSWORD`. LDAP bind values are never written here.
 - `state/agents/<id>/metadata.json`: canonical per-agent desired configuration.
 - `state/agents/<id>/agent.env`: generated per-agent public runtime environment.
-- `state/authproxy.env`, `state/authproxy_secrets.env`, `state/authproxy_agents.json`, and `state/dashboard-sockets/`: generated shared auth runtime files that are intentionally regenerated rather than backed up.
+- `state/authproxy.env`, `state/authproxy_secrets.env`, `state/authproxy/agents.json`, and `state/dashboard-sockets/`: generated shared auth runtime files that are intentionally regenerated rather than backed up.
+- `state/runtime-fingerprints.json`: hashes of the generated inputs each agent unit and the auth service were last started with; derived, not backed up, so a restore restarts everything.
 - `volumes/hermes-agents-home`: shared Podman volume with one Hermes home subdir per agent.
 
 ### `imageroot/actions/`
@@ -49,15 +51,14 @@ Action directories contain numbered executable steps plus JSON schemas for publi
 - `configure-module/10validate-input`: validates the submitted `base_virtualhost`, optional shared `user_domain`, optional shared `lets_encrypt`, and agent list including per-agent `allowed_user`.
 - `configure-module/20persist-shared-env`: persists the shared virtualhost, optional shared `user_domain`, plus `lets_encrypt`, tracks previous route values for cleanup, and backfills `TIMEZONE`.
 - `configure-module/25configure-user-domain`: binds or unbinds the module from the selected NS8 user domain after shared settings are persisted.
-- `configure-module/30remove-deleted-routes`: reserved lifecycle slot; removed-agent route cleanup is no longer needed because the module manages only the shared Traefik route.
 - `configure-module/40remove-deleted-agents`: stops removed services, removes removed pods and containers including `hermes-socket-<id>`, and delegates generated-state cleanup.
 - `configure-module/50write-agent-metadata`: stores one metadata file per desired agent, including persisted `allowed_user`.
 - `configure-module/60refresh-shared-settings`: refreshes shared SMTP settings via `discover-smarthost`.
-- `configure-module/70sync-agent-runtime`: regenerates `agents/<id>/agent.env` and `secrets/<id>.env`, generates or preserves a unique per-agent `API_SERVER_KEY`, includes the live auth proxy LDAP runtime env, bind secrets, and per-agent `AGENT_ALLOWED_USER` when a shared `user_domain` is configured, and writes `authproxy_agents.json` `upstream_socket` entries.
+- `configure-module/70sync-agent-runtime`: regenerates `agents/<id>/agent.env` and `secrets/<id>.env`, generates or preserves a unique per-agent `API_SERVER_KEY`, includes `USER_DOMAIN` and per-agent `AGENT_ALLOWED_USER` when a shared `user_domain` is configured, writes the LDAP runtime env and bind secrets only into the auth proxy files, and writes `authproxy/agents.json` `upstream_socket` entries.
 - `configure-module/75seed-agent-home`: runs a one-shot Hermes container to seed strict first-write-only `SOUL.md` and `.env` content into the agent's subdir inside the shared `hermes-agents-home` volume from checked-in templates.
 - `configure-module/80reload-systemd`: reloads the user systemd manager.
 - `configure-module/90reconcile-desired-routes`: creates, updates, or deletes the shared Traefik auth route for the desired configuration.
-- `configure-module/95reconcile-agent-services`: enables, starts, stops, or disables `hermes@<id>.service` and `hermes-socket@<id>.service` to match desired state.
+- `configure-module/95reconcile-agent-services`: enables, starts, stops, or disables `hermes@<id>.service` and `hermes-socket@<id>.service` to match desired state, restarting only agents whose fingerprinted inputs changed or that are not active, and applies the same rule to `hermes-auth.service`.
 - `configure-module/validate-input.json`: input schema for the shared `base_virtualhost`, optional `user_domain`, shared `lets_encrypt`, and the Hermes `agents` payload including `allowed_user`.
 - `get-configuration/20read`: returns the shared dashboard virtualhost, shared `user_domain`, shared `lets_encrypt` setting, and configured agents with desired persisted status plus `allowed_user`.
 - `get-configuration/validate-output.json`: output schema for the shared dashboard virtualhost, shared `user_domain`, shared `lets_encrypt` flag, and the Hermes `agents` response.
@@ -82,7 +83,7 @@ Typical NS8 actions that are intentionally absent: `get-status`, which remains i
 - `discover-smarthost`: reads cluster smarthost settings and writes public values into `environment` and `SMTP_PASSWORD` into `secrets/shared.env`.
 - `ensure-agent-home-ownership`: runs a one-shot root helper container from the configured Hermes image and recursively assigns the per-agent subdir inside `hermes-agents-home` to that image's dynamic `hermes` UID/GID when needed.
 - `remove-agent-state`: removes generated per-agent secrets files (`secrets/<id>.env`), dashboard socket files, agent state directories (which include `agents/<id>/agent.env`), and the per-agent subdir inside the shared `hermes-agents-home` volume.
-- `sync-agent-runtime`: writes `agents/<id>/agent.env` and `secrets/<id>.env` for each configured agent, generates or preserves a unique per-agent `API_SERVER_KEY`, includes the live auth proxy LDAP env and bind secrets when `USER_DOMAIN` is set, and generates `authproxy_agents.json` `upstream_socket` records.
+- `sync-agent-runtime`: writes `agents/<id>/agent.env` and `secrets/<id>.env` for each configured agent, generates or preserves a unique per-agent `API_SERVER_KEY`, writes the LDAP env and bind secrets into the auth proxy files only when `USER_DOMAIN` is set, and generates `authproxy/agents.json` `upstream_socket` records.
 
 ### `imageroot/update-module.d/`
 
@@ -99,7 +100,7 @@ Typical NS8 actions that are intentionally absent: `get-status`, which remains i
 ### `imageroot/pypkg/`
 
 - `hermes_agent_state.py`: small shared helper for metadata validation, env/json file handling, dashboard socket naming, named-volume and secrets-directory layout (`SECRETS_DIR`, `AGENTS_HOME_VOLUME`, `SHARED_SECRETS_ENVFILE`), and the `list_known_agent_ids()` scanner.
-- `hermes_user_domain.py`: shared helper for user-domain normalization, `Ldapproxy` lookup, LDAP user listing, and generation of per-agent LDAP runtime env and bind secrets.
+- `hermes_user_domain.py`: shared helper for user-domain normalization, `Ldapproxy` lookup, LDAP user listing, and generation of the auth proxy LDAP runtime env and bind secrets.
 
 ### `imageroot/systemd/user/`
 
@@ -118,20 +119,26 @@ The user units own long-running container lifecycle through `systemctl --user`, 
 ## `containers/`
 
 - `containers/auth/Containerfile`: shared dashboard auth proxy image.
-- `containers/auth/authproxy.py`: FastAPI auth proxy that authenticates the shared virtualhost against LDAP, issues a host-wide session cookie, preserves the dashboard upstream `Authorization` header, replaces any inbound `X-Hermes-Authenticated-User` value with a trusted value derived from the authenticated session username, logs auth attempts and outcomes to stdout, and proxies authenticated sessions to the assigned dashboard upstream from `authproxy_agents.json`, including `upstream_socket` records.
-- `containers/hermes/Containerfile`: Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.7.30` (Hermes release `v0.19.1`) that keeps the upstream `/init` + s6-overlay entrypoint and only layers NS8-specific packages and web assets.
+- `containers/auth/authproxy.py`: FastAPI auth proxy that authenticates the shared virtualhost against LDAP, issues a host-wide session cookie, preserves the dashboard upstream `Authorization` header, replaces any inbound `X-Hermes-Authenticated-User` value with a trusted value derived from the authenticated session username, logs auth attempts and outcomes to stdout, and proxies authenticated sessions to the assigned dashboard upstream from `authproxy/agents.json`, including `upstream_socket` records.
+- `containers/hermes/Containerfile`: Hermes wrapper image built from `docker.io/nousresearch/hermes-agent:v2026.9.7` (Hermes release `v0.21.1`) that keeps the upstream dispatcher + s6-overlay entrypoint and only layers pinned NS8-specific packages and web assets. Built with `containers/hermes` as its own context.
+- `containers/hermes/favicon.ico`: NethServer favicon installed over the upstream dashboard icons at build time.
 - `containers/socket/Containerfile`: minimal Alpine-based socket relay image that runs `socat` for the per-agent dashboard sidecar.
 
 ## `ui/`
 
-The embedded admin UI uses Vue 2 and Vue CLI.
+The embedded admin UI uses Vue 2.7 on Vue CLI 5 (webpack 5), ESLint 8 and Prettier 3; it builds on current Node LTS without the OpenSSL legacy provider.
 
 - `AGENTS.md`: local UI instructions.
 - `public/metadata.json`: module metadata used by the UI shell.
 - `public/i18n/`: translation files.
 - `src/router/index.js`: routes for status, settings, and about.
 - `src/store/index.js`: embedded module context store.
-- `src/views/Settings.vue`: shared dashboard virtualhost, shared `user_domain`, shared `lets_encrypt`, per-agent `allowed_user`, the agent list, create/edit/delete modals, and start/stop state management.
+- `src/views/Settings.vue`: shared dashboard virtualhost, shared `user_domain`, shared `lets_encrypt`, per-agent `allowed_user`, the agent list, the delete modal, start/stop state management, and the task calls; delegates the create/edit form to `AgentFormModal` and all pure logic to `src/lib/agents.js`.
+- `src/components/AgentFormModal.vue`: single create/edit agent modal driven by `v-model` and an `errors` object from the parent.
+- `src/shims/crypto.js`: browser stand-in for the Node `crypto` module (only `randomBytes`, used by the uuid code bundled in `@nethserver/ns8-ui-lib`), aliased from `vue.config.js` because webpack 5 ships no Node polyfills.
+- `vue.config.js`: Vue CLI 5 configuration: image assets always emitted as files (module logo), the `crypto` alias, and the export-presence warning suppression explained inline.
+- `src/lib/agents.js`: framework-free helpers (agent normalization, validation mirroring `configure-module`, id allocation, `validation-failed` mapping, domain and user helpers) with the fallback validation constants.
+- `tests/unit/agents.spec.js` and `jest.config.js`: Jest unit tests for `src/lib/agents.js`, run with `yarn test:unit`.
 
 ## `tests/`
 

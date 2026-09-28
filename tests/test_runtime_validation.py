@@ -14,7 +14,6 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest import mock
 
-
 ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = ROOT / "imageroot" / "pypkg" / "hermes_agent_state.py"
 SYNC_PATH = ROOT / "imageroot" / "bin" / "sync-agent-runtime"
@@ -27,17 +26,22 @@ SOCKET_SERVICE_TEMPLATE_PATH = ROOT / "imageroot" / "systemd" / "user" / "hermes
 AUTH_CONTAINERFILE_PATH = ROOT / "containers" / "auth" / "Containerfile"
 HERMES_CONTAINERFILE_PATH = ROOT / "containers" / "hermes" / "Containerfile"
 SOCKET_CONTAINERFILE_PATH = ROOT / "containers" / "socket" / "Containerfile"
-HERMES_ENTRYPOINT_PATH = ROOT / "containers" / "hermes" / "entrypoint.sh"
-HERMES_DASHBOARD_PATCH_PATH = ROOT / "containers" / "hermes" / "patch_dashboard_source.py"
 BUILD_IMAGES_PATH = ROOT / "build-images.sh"
 BUILD_IMAGES_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "build-images.yml"
 PUBLISH_IMAGES_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "publish-images.yml"
 CREATE_TESTING_RELEASE_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "create-testing-release.yml"
+TEST_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "test.yml"
+RENOVATE_UI_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "test-ui-build-renovate.yml"
+DIGITALOCEAN_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "test-on-digitalocean-infra.yml"
+TEST_MODULE_PATH = ROOT / "test-module.sh"
+KICKSTART_PATH = ROOT / "tests" / "kickstart.robot"
 CREATE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "create-module"
 CONFIGURE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "configure-module"
 DESTROY_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "destroy-module"
 RESTORE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "restore-module"
 UPDATE_MODULE_SCRIPT_DIR = ROOT / "imageroot" / "update-module.d"
+DISCOVER_SMARTHOST_PATH = ROOT / "imageroot" / "bin" / "discover-smarthost"
+MIGRATE_SECRETS_DIR_SCRIPT_PATH = UPDATE_MODULE_SCRIPT_DIR / "20migrate-secrets-dir"
 PERSIST_SHARED_ENV_PATH = CONFIGURE_MODULE_ACTION_DIR / "20persist-shared-env"
 SEED_AGENT_HOME_ACTION_PATH = CONFIGURE_MODULE_ACTION_DIR / "75seed-agent-home"
 RESTORE_COPY_ENV_PATH = RESTORE_MODULE_ACTION_DIR / "06copyenv"
@@ -46,6 +50,7 @@ STATE_INCLUDE_PATH = ROOT / "imageroot" / "etc" / "state-include.conf"
 UPDATE_OWNERSHIP_SCRIPT_PATH = UPDATE_MODULE_SCRIPT_DIR / "30ensure-agent-home-ownership"
 UPDATE_RESTART_SCRIPT_PATH = UPDATE_MODULE_SCRIPT_DIR / "80restart"
 RECONCILE_DESIRED_ROUTES_PATH = CONFIGURE_MODULE_ACTION_DIR / "90reconcile-desired-routes"
+RECONCILE_AGENT_SERVICES_PATH = CONFIGURE_MODULE_ACTION_DIR / "95reconcile-agent-services"
 DESTROY_REMOVE_ROUTES_PATH = DESTROY_MODULE_ACTION_DIR / "10remove-routes"
 GET_CONFIGURATION_PATH = ROOT / "imageroot" / "actions" / "get-configuration" / "20read"
 GET_AGENT_RUNTIME_PATH = ROOT / "imageroot" / "actions" / "get-agent-runtime" / "10read"
@@ -193,15 +198,48 @@ def emulate_sync_agent_runtime(sync_module, command):
 
     persist_process_environment()
 
-    with mock.patch.object(sync_module.agent, "read_envfile", side_effect=read_envfile, create=True), mock.patch.object(
-        sync_module.agent,
-        "write_envfile",
-        side_effect=write_envfile,
-        create=True,
+    with (
+        mock.patch.object(sync_module.agent, "read_envfile", side_effect=read_envfile, create=True),
+        mock.patch.object(
+            sync_module.agent,
+            "write_envfile",
+            side_effect=write_envfile,
+            create=True,
+        ),
     ):
         sync_module.sync_agent_runtime_files(agent_id=agent_id)
 
     return types.SimpleNamespace(returncode=0)
+
+
+@contextmanager
+def stubbed_agent_module(**attributes):
+    """Install a throwaway ``agent`` module (the NS8 core helper) for one test."""
+    original_agent = sys.modules.get("agent")
+    agent_stub = types.ModuleType("agent")
+    for name, value in attributes.items():
+        setattr(agent_stub, name, value)
+    sys.modules["agent"] = agent_stub
+    try:
+        yield agent_stub
+    finally:
+        if original_agent is not None:
+            sys.modules["agent"] = original_agent
+        else:
+            sys.modules.pop("agent", None)
+
+
+def run_script(path, argv=None):
+    original_argv = sys.argv[:]
+    sys.argv[:] = [str(path), *(argv or [])]
+    try:
+        try:
+            runpy.run_path(str(path), run_name="__main__")
+        except SystemExit as exit_error:
+            if exit_error.code not in (0, None):
+                raise
+    finally:
+        sys.argv[:] = original_argv
 
 
 @contextmanager
@@ -244,8 +282,8 @@ def mocked_ldap_modules(domains=None, users_by_domain=None):
 
             return FakeLdapClientInstance(users_by_domain.get(user_domain, []))
 
-    setattr(ldapproxy_module, "Ldapproxy", FakeLdapproxy)
-    setattr(ldapclient_module, "Ldapclient", FakeLdapclient)
+    ldapproxy_module.Ldapproxy = FakeLdapproxy
+    ldapclient_module.Ldapclient = FakeLdapclient
 
     sys.modules["agent.ldapproxy"] = ldapproxy_module
     sys.modules["agent.ldapclient"] = ldapclient_module
@@ -287,8 +325,12 @@ def mocked_authproxy_dependencies():
         "httpx",
         "itsdangerous",
         "ldap3",
+        "ldap3.core",
+        "ldap3.core.exceptions",
         "ldap3.utils",
         "ldap3.utils.conv",
+        "starlette",
+        "starlette.background",
         "uvicorn",
     ]
     original_modules = {name: sys.modules.get(name) for name in module_names}
@@ -299,6 +341,8 @@ def mocked_authproxy_dependencies():
     httpx_module = types.ModuleType("httpx")
     itsdangerous_module = types.ModuleType("itsdangerous")
     ldap3_module = types.ModuleType("ldap3")
+    ldap3_core_module = types.ModuleType("ldap3.core")
+    ldap3_core_exceptions_module = types.ModuleType("ldap3.core.exceptions")
     ldap3_utils_module = types.ModuleType("ldap3.utils")
     ldap3_utils_conv_module = types.ModuleType("ldap3.utils.conv")
     uvicorn_module = types.ModuleType("uvicorn")
@@ -423,35 +467,54 @@ def mocked_authproxy_dependencies():
     def escape_filter_chars(value):
         return value.replace("\\", r"\5c").replace("*", r"\2a").replace("(", r"\28").replace(")", r"\29")
 
-    setattr(fastapi_module, "FastAPI", FakeFastAPI)
-    setattr(fastapi_module, "Request", object)
-    setattr(fastapi_module, "WebSocket", object)
-    setattr(fastapi_module, "WebSocketDisconnect", FakeWebSocketDisconnect)
-    setattr(fastapi_responses_module, "HTMLResponse", FakeResponse)
-    setattr(fastapi_responses_module, "JSONResponse", FakeResponse)
-    setattr(fastapi_responses_module, "PlainTextResponse", FakeResponse)
-    setattr(fastapi_responses_module, "RedirectResponse", FakeResponse)
-    setattr(fastapi_responses_module, "Response", FakeResponse)
-    setattr(aiohttp_module, "ClientError", FakeAiohttpClientError)
-    setattr(aiohttp_module, "ClientSession", FakeClientSession)
-    setattr(aiohttp_module, "UnixConnector", FakeUnixConnector)
-    setattr(
-        aiohttp_module,
-        "WSMsgType",
-        types.SimpleNamespace(TEXT="text", BINARY="binary", CLOSE="close", CLOSED="closed", CLOSING="closing", ERROR="error"),
+    fastapi_module.FastAPI = FakeFastAPI
+    fastapi_module.Request = object
+    fastapi_module.WebSocket = object
+    fastapi_module.WebSocketDisconnect = FakeWebSocketDisconnect
+    fastapi_responses_module.HTMLResponse = FakeResponse
+    fastapi_responses_module.JSONResponse = FakeResponse
+    fastapi_responses_module.PlainTextResponse = FakeResponse
+    fastapi_responses_module.RedirectResponse = FakeResponse
+    fastapi_responses_module.Response = FakeResponse
+    fastapi_responses_module.StreamingResponse = FakeResponse
+    starlette_module = types.ModuleType("starlette")
+    starlette_background_module = types.ModuleType("starlette.background")
+
+    class FakeBackgroundTask:
+        def __init__(self, func, *args, **kwargs):
+            self.func = func
+            self.args = args
+            self.kwargs = kwargs
+
+    starlette_background_module.BackgroundTask = FakeBackgroundTask
+    aiohttp_module.ClientError = FakeAiohttpClientError
+    aiohttp_module.ClientSession = FakeClientSession
+    aiohttp_module.UnixConnector = FakeUnixConnector
+    aiohttp_module.WSMsgType = types.SimpleNamespace(
+        TEXT="text", BINARY="binary", CLOSE="close", CLOSED="closed", CLOSING="closing", ERROR="error"
     )
-    setattr(httpx_module, "AsyncClient", FakeAsyncClient)
-    setattr(httpx_module, "AsyncHTTPTransport", FakeAsyncHTTPTransport)
-    setattr(httpx_module, "RequestError", FakeRequestError)
-    setattr(httpx_module, "ReadError", FakeReadError)
-    setattr(itsdangerous_module, "BadSignature", ValueError)
-    setattr(itsdangerous_module, "BadTimeSignature", ValueError)
-    setattr(itsdangerous_module, "URLSafeTimedSerializer", FakeSerializer)
-    setattr(ldap3_module, "ALL", object())
-    setattr(ldap3_module, "Connection", FakeConnection)
-    setattr(ldap3_module, "Server", object)
-    setattr(ldap3_utils_conv_module, "escape_filter_chars", escape_filter_chars)
-    setattr(uvicorn_module, "run", lambda *args, **kwargs: None)
+    httpx_module.AsyncClient = FakeAsyncClient
+    httpx_module.AsyncHTTPTransport = FakeAsyncHTTPTransport
+    httpx_module.RequestError = FakeRequestError
+    httpx_module.ReadError = FakeReadError
+    itsdangerous_module.BadSignature = ValueError
+    itsdangerous_module.BadTimeSignature = ValueError
+    itsdangerous_module.URLSafeTimedSerializer = FakeSerializer
+    ldap3_module.ALL = object()
+    ldap3_module.NONE = object()
+    ldap3_module.Connection = FakeConnection
+    ldap3_module.Server = object
+    ldap3_utils_conv_module.escape_filter_chars = escape_filter_chars
+
+    class FakeLDAPException(Exception):
+        pass
+
+    class FakeLDAPInvalidCredentialsResult(FakeLDAPException):
+        pass
+
+    ldap3_core_exceptions_module.LDAPException = FakeLDAPException
+    ldap3_core_exceptions_module.LDAPInvalidCredentialsResult = FakeLDAPInvalidCredentialsResult
+    uvicorn_module.run = lambda *args, **kwargs: None
 
     sys.modules["aiohttp"] = aiohttp_module
     sys.modules["fastapi"] = fastapi_module
@@ -459,8 +522,12 @@ def mocked_authproxy_dependencies():
     sys.modules["httpx"] = httpx_module
     sys.modules["itsdangerous"] = itsdangerous_module
     sys.modules["ldap3"] = ldap3_module
+    sys.modules["ldap3.core"] = ldap3_core_module
+    sys.modules["ldap3.core.exceptions"] = ldap3_core_exceptions_module
     sys.modules["ldap3.utils"] = ldap3_utils_module
     sys.modules["ldap3.utils.conv"] = ldap3_utils_conv_module
+    sys.modules["starlette"] = starlette_module
+    sys.modules["starlette.background"] = starlette_background_module
     sys.modules["uvicorn"] = uvicorn_module
 
     try:
@@ -608,6 +675,36 @@ class HermesAuthProxyTest(unittest.TestCase):
             "(|(uid=ali\\2a\\28ce\\29)(cn=ali\\2a\\28ce\\29)(mail=ali\\2a\\28ce\\29))",
         )
 
+    def test_authenticate_credentials_returns_false_for_invalid_credentials(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        with (
+            mock.patch.object(authproxy, "lookup_user_dn", return_value="uid=alice,dc=example,dc=org"),
+            mock.patch.object(authproxy, "ldap_server", return_value=object()),
+            mock.patch.object(
+                authproxy,
+                "Connection",
+                side_effect=authproxy.LDAPInvalidCredentialsResult("invalid credentials"),
+            ) as connection,
+        ):
+            authenticated = authproxy.authenticate_credentials("alice", "wrong", config)
+
+        self.assertFalse(authenticated)
+        self.assertTrue(connection.call_args.kwargs["raise_exceptions"])
+
+    def test_authenticate_credentials_propagates_ldap_transport_errors(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        with (
+            mock.patch.object(authproxy, "lookup_user_dn", return_value="uid=alice,dc=example,dc=org"),
+            mock.patch.object(authproxy, "ldap_server", return_value=object()),
+            mock.patch.object(authproxy, "Connection", side_effect=authproxy.LDAPException("connection refused")),
+            self.assertRaises(authproxy.LDAPException),
+        ):
+            authproxy.authenticate_credentials("alice", "secret", config)
+
     def test_proxy_logs_successful_form_authentication(self):
         authproxy = self.load_authproxy()
         config = self.runtime_config(authproxy)
@@ -624,11 +721,15 @@ class HermesAuthProxyTest(unittest.TestCase):
             body=b"username=alice&password=secret&next=%2Ffoo",
         )
 
-        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
-            authproxy,
-            "authenticate_credentials",
-            return_value=True,
-        ), mock.patch.object(authproxy.LOGGER, "info") as log_info:
+        with (
+            mock.patch.object(authproxy, "load_config", return_value=config),
+            mock.patch.object(
+                authproxy,
+                "authenticate_credentials",
+                return_value=True,
+            ),
+            mock.patch.object(authproxy.LOGGER, "info") as log_info,
+        ):
             response = asyncio.run(authproxy.proxy("", request))
 
         self.assertEqual(response.kwargs["status_code"], 303)
@@ -660,11 +761,15 @@ class HermesAuthProxyTest(unittest.TestCase):
             body=b"username=alice&password=wrong&next=%2F",
         )
 
-        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
-            authproxy,
-            "authenticate_credentials",
-            return_value=False,
-        ), mock.patch.object(authproxy.LOGGER, "info") as log_info:
+        with (
+            mock.patch.object(authproxy, "load_config", return_value=config),
+            mock.patch.object(
+                authproxy,
+                "authenticate_credentials",
+                return_value=False,
+            ),
+            mock.patch.object(authproxy.LOGGER, "info") as log_info,
+        ):
             response = asyncio.run(authproxy.proxy("", request))
 
         self.assertEqual(response.kwargs["status_code"], 401)
@@ -674,13 +779,174 @@ class HermesAuthProxyTest(unittest.TestCase):
         self.assertIn("event=auth_failed", logged_messages[1])
         self.assertIn("detail=invalid_credentials_or_assignment", logged_messages[1])
 
-    def test_proxy_returns_502_when_upstream_read_fails(self):
+    def test_login_throttle_blocks_after_max_failures_and_recovers(self):
+        authproxy = self.load_authproxy()
+        now = [1000.0]
+        throttle = authproxy.LoginThrottle(max_failures=3, window_seconds=60, clock=lambda: now[0])
+        keys = ["ip:198.51.100.42", "user:alice"]
+
+        self.assertEqual(throttle.retry_after(keys), 0)
+        for _ in range(3):
+            throttle.record_failure(keys)
+        self.assertGreater(throttle.retry_after(keys), 0)
+        self.assertGreater(throttle.retry_after(["user:alice"]), 0, "per-user bucket must also lock")
+        self.assertEqual(throttle.retry_after(["ip:203.0.113.9"]), 0, "other clients are unaffected")
+
+        now[0] += 61
+        self.assertEqual(throttle.retry_after(keys), 0, "failures age out of the window")
+
+        throttle.record_failure(keys)
+        throttle.clear(keys)
+        self.assertEqual(throttle.retry_after(keys), 0)
+
+    def test_proxy_rate_limits_repeated_failed_logins_before_ldap(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+        authproxy.LOGIN_THROTTLE = authproxy.LoginThrottle(max_failures=2, window_seconds=60)
+
+        class FakeUpstreamClient:
+            async def request(self, *args, **kwargs):
+                raise AssertionError("upstream should not be called when auth fails")
+
+        def make_login_request():
+            return self.make_request(
+                FakeUpstreamClient(),
+                headers={"content-type": "application/x-www-form-urlencoded"},
+                path="/login",
+                method="POST",
+                body=b"username=alice&password=wrong&next=%2F",
+            )
+
+        with (
+            mock.patch.object(authproxy, "load_config", return_value=config),
+            mock.patch.object(
+                authproxy,
+                "authenticate_credentials",
+                return_value=False,
+            ) as authenticate,
+            mock.patch.object(authproxy.LOGGER, "info") as log_info,
+        ):
+            first = asyncio.run(authproxy.proxy("", make_login_request()))
+            second = asyncio.run(authproxy.proxy("", make_login_request()))
+            third = asyncio.run(authproxy.proxy("", make_login_request()))
+
+        self.assertEqual(first.kwargs["status_code"], 401)
+        self.assertEqual(second.kwargs["status_code"], 401)
+        self.assertEqual(third.kwargs["status_code"], 429)
+        self.assertIn("Retry-After", third.kwargs["headers"])
+        self.assertEqual(authenticate.call_count, 2, "the throttled attempt must not reach LDAP")
+        logged_messages = [call.args[0] for call in log_info.call_args_list]
+        self.assertIn("detail=rate_limited", logged_messages[-1])
+        self.assertIn("user=alice", logged_messages[-1])
+
+    def test_proxy_verifies_password_even_for_unassigned_users(self):
         authproxy = self.load_authproxy()
         config = self.runtime_config(authproxy)
 
         class FakeUpstreamClient:
             async def request(self, *args, **kwargs):
-                del args, kwargs
+                raise AssertionError("upstream should not be called when auth fails")
+
+        request = self.make_request(
+            FakeUpstreamClient(),
+            headers={"content-type": "application/x-www-form-urlencoded"},
+            path="/login",
+            method="POST",
+            body=b"username=mallory&password=guess&next=%2F",
+        )
+
+        with (
+            mock.patch.object(authproxy, "load_config", return_value=config),
+            mock.patch.object(
+                authproxy,
+                "authenticate_credentials",
+                return_value=True,
+            ) as authenticate,
+            mock.patch.object(authproxy.LOGGER, "info"),
+        ):
+            response = asyncio.run(authproxy.proxy("", request))
+
+        self.assertEqual(response.kwargs["status_code"], 401)
+        authenticate.assert_called_once()
+
+    def test_normalize_next_path_only_allows_same_origin_paths(self):
+        authproxy = self.load_authproxy()
+        cases = {
+            "/dashboard?tab=1": "/dashboard?tab=1",
+            "dashboard": "/dashboard",
+            "": "/",
+            None: "/",
+            "//evil.example/x": "/",
+            "/\\evil.example": "/",
+            "/\\\\evil.example": "/",
+            "https://evil.example/": "/",
+            "javascript:alert(1)": "/",
+            "/ok\r\nSet-Cookie: x=y": "/",
+            "/login": "/",
+            "/logout": "/",
+            "/hermes-3/": "/",
+        }
+        for candidate, expected in cases.items():
+            with self.subTest(candidate=candidate):
+                self.assertEqual(authproxy.normalize_next_path(candidate), expected)
+
+    def test_proxy_reports_ldap_outage_as_503_not_wrong_password(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        class FakeUpstreamClient:
+            async def request(self, *args, **kwargs):
+                raise AssertionError("upstream should not be called")
+
+        request = self.make_request(
+            FakeUpstreamClient(),
+            headers={"content-type": "application/x-www-form-urlencoded"},
+            path="/login",
+            method="POST",
+            body=b"username=alice&password=secret&next=%2F",
+        )
+
+        with (
+            mock.patch.object(authproxy, "load_config", return_value=config),
+            mock.patch.object(
+                authproxy,
+                "authenticate_credentials",
+                side_effect=authproxy.LDAPException("connection refused"),
+            ),
+            mock.patch.object(authproxy.LOGGER, "info") as log_info,
+        ):
+            response = asyncio.run(authproxy.proxy("", request))
+
+        self.assertEqual(response.kwargs["status_code"], 503)
+        self.assertIn("Retry-After", response.kwargs["headers"])
+        self.assertIn("detail=ldap_unavailable", log_info.call_args_list[-1].args[0])
+        # An outage must not count against the user's login throttle.
+        self.assertEqual(authproxy.LOGIN_THROTTLE.retry_after(["user:alice"]), 0)
+
+    def test_run_server_trusts_forwarded_headers_from_traefik(self):
+        authproxy = self.load_authproxy()
+
+        with (
+            mock.patch.object(authproxy.uvicorn, "run") as uvicorn_run,
+            mock.patch.dict(os.environ, {"AUTH_PROXY_PORT": "9119"}, clear=False),
+        ):
+            authproxy.run_server()
+
+        uvicorn_run.assert_called_once()
+        self.assertTrue(uvicorn_run.call_args.kwargs["proxy_headers"])
+        self.assertEqual(uvicorn_run.call_args.kwargs["forwarded_allow_ips"], "*")
+        self.assertEqual(uvicorn_run.call_args.kwargs["port"], 9119)
+
+    def test_proxy_returns_502_when_upstream_read_fails(self):
+        authproxy = self.load_authproxy()
+        config = self.runtime_config(authproxy)
+
+        class FakeUpstreamClient:
+            def build_request(self, *args, **kwargs):
+                return types.SimpleNamespace(args=args, kwargs=kwargs)
+
+            async def send(self, upstream_request, stream=False):
+                del upstream_request, stream
                 raise authproxy.httpx.ReadError("connection reset by peer")
 
         request = self.make_request(
@@ -699,9 +965,10 @@ class HermesAuthProxyTest(unittest.TestCase):
             method="GET",
         )
 
-        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
-            authproxy.LOGGER, "info"
-        ) as log_info:
+        with (
+            mock.patch.object(authproxy, "load_config", return_value=config),
+            mock.patch.object(authproxy.LOGGER, "info") as log_info,
+        ):
             response = asyncio.run(authproxy.proxy("", request))
 
         self.assertEqual(response.kwargs["status_code"], 502)
@@ -719,13 +986,21 @@ class HermesAuthProxyTest(unittest.TestCase):
 
         class FakeUpstreamResponse:
             def __init__(self):
-                self.content = b"ok"
                 self.status_code = 200
                 self.headers = {}
 
+            async def aiter_raw(self):
+                yield b"ok"
+
+            async def aclose(self):
+                return None
+
         class FakeUpstreamClient:
-            async def request(self, *args, **kwargs):
-                del args, kwargs
+            def build_request(self, *args, **kwargs):
+                return types.SimpleNamespace(args=args, kwargs=kwargs)
+
+            async def send(self, upstream_request, stream=False):
+                del upstream_request, stream
                 return FakeUpstreamResponse()
 
         request = self.make_request(
@@ -745,9 +1020,11 @@ class HermesAuthProxyTest(unittest.TestCase):
             method="GET",
         )
 
-        with mock.patch.dict(os.environ, {"DEBUG": "1"}, clear=False), mock.patch.object(
-            authproxy, "load_config", return_value=config
-        ), mock.patch.object(authproxy.LOGGER, "info") as log_info:
+        with (
+            mock.patch.dict(os.environ, {"DEBUG": "1"}, clear=False),
+            mock.patch.object(authproxy, "load_config", return_value=config),
+            mock.patch.object(authproxy.LOGGER, "info") as log_info,
+        ):
             response = asyncio.run(authproxy.proxy("api/status", request))
 
         self.assertEqual(response.kwargs["status_code"], 200)
@@ -857,10 +1134,13 @@ class HermesAuthProxyTest(unittest.TestCase):
         )
         websocket._incoming = [{"type": "websocket.disconnect"}]
 
-        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
-            authproxy,
-            "upstream_websocket_client_for_agent",
-            return_value=fake_ws_client,
+        with (
+            mock.patch.object(authproxy, "load_config", return_value=config),
+            mock.patch.object(
+                authproxy,
+                "upstream_websocket_client_for_agent",
+                return_value=fake_ws_client,
+            ),
         ):
             asyncio.run(asyncio.wait_for(authproxy.proxy_websocket("api/pty", websocket), timeout=0.1))
 
@@ -919,10 +1199,13 @@ class HermesAuthProxyTest(unittest.TestCase):
 
         websocket.receive = receive_forever
 
-        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
-            authproxy,
-            "upstream_websocket_client_for_agent",
-            return_value=fake_ws_client,
+        with (
+            mock.patch.object(authproxy, "load_config", return_value=config),
+            mock.patch.object(
+                authproxy,
+                "upstream_websocket_client_for_agent",
+                return_value=fake_ws_client,
+            ),
         ):
             asyncio.run(asyncio.wait_for(authproxy.proxy_websocket("api/events", websocket), timeout=0.1))
 
@@ -988,7 +1271,11 @@ class HermesAuthProxyTest(unittest.TestCase):
 
         fake_ws_client = FakeWsClient()
         websocket = self.make_websocket(
-            headers={"x-forwarded-proto": "https", "host": "agents.example.org", "sec-websocket-protocol": "chat.v1, chat.v2"},
+            headers={
+                "x-forwarded-proto": "https",
+                "host": "agents.example.org",
+                "sec-websocket-protocol": "chat.v1, chat.v2",
+            },
             cookies={
                 authproxy.SESSION_COOKIE: json.dumps(
                     {
@@ -1002,10 +1289,13 @@ class HermesAuthProxyTest(unittest.TestCase):
         )
         websocket._incoming = [{"type": "websocket.receive", "text": "client-hello"}, {"type": "websocket.disconnect"}]
 
-        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
-            authproxy,
-            "upstream_websocket_client_for_agent",
-            return_value=fake_ws_client,
+        with (
+            mock.patch.object(authproxy, "load_config", return_value=config),
+            mock.patch.object(
+                authproxy,
+                "upstream_websocket_client_for_agent",
+                return_value=fake_ws_client,
+            ),
         ):
             asyncio.run(authproxy.proxy_websocket("api/pty", websocket))
 
@@ -1055,9 +1345,14 @@ class HermesAuthProxyTest(unittest.TestCase):
 
         class FakeUpstreamResponse:
             def __init__(self):
-                self.content = b"ok"
                 self.status_code = 200
                 self.headers = {"location": "http://agent-1/settings"}
+
+            async def aiter_raw(self):
+                yield b"ok"
+
+            async def aclose(self):
+                return None
 
         class FakeUdsClient:
             def __init__(self, *args, **kwargs):
@@ -1065,8 +1360,12 @@ class HermesAuthProxyTest(unittest.TestCase):
                 self.kwargs = kwargs
                 self.calls = []
 
-            async def request(self, *args, **kwargs):
-                self.calls.append({"args": args, "kwargs": kwargs})
+            def build_request(self, method, url, **kwargs):
+                self.calls.append({"args": (method,), "kwargs": {"url": url, **kwargs}})
+                return types.SimpleNamespace(method=method, url=url, **kwargs)
+
+            async def send(self, upstream_request, stream=False):
+                del upstream_request, stream
                 return FakeUpstreamResponse()
 
             async def aclose(self):
@@ -1096,14 +1395,18 @@ class HermesAuthProxyTest(unittest.TestCase):
             method="GET",
         )
 
-        with mock.patch.object(authproxy, "load_config", return_value=config), mock.patch.object(
-            authproxy.httpx,
-            "AsyncClient",
-            side_effect=build_fake_client,
-        ), mock.patch.object(
-            authproxy.httpx,
-            "AsyncHTTPTransport",
-            side_effect=lambda **kwargs: types.SimpleNamespace(**kwargs),
+        with (
+            mock.patch.object(authproxy, "load_config", return_value=config),
+            mock.patch.object(
+                authproxy.httpx,
+                "AsyncClient",
+                side_effect=build_fake_client,
+            ),
+            mock.patch.object(
+                authproxy.httpx,
+                "AsyncHTTPTransport",
+                side_effect=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            ),
         ):
             response = asyncio.run(authproxy.proxy("api/status", request))
 
@@ -1119,16 +1422,25 @@ class HermesAuthProxyTest(unittest.TestCase):
 
         class FakeUpstreamResponse:
             def __init__(self):
-                self.content = b"ok"
                 self.status_code = 200
                 self.headers = {}
+
+            async def aiter_raw(self):
+                yield b"ok"
+
+            async def aclose(self):
+                return None
 
         class FakeUpstreamClient:
             def __init__(self):
                 self.calls = []
 
-            async def request(self, *args, **kwargs):
-                self.calls.append({"args": args, "kwargs": kwargs})
+            def build_request(self, method, url, **kwargs):
+                self.calls.append({"args": (method,), "kwargs": {"url": url, **kwargs}})
+                return types.SimpleNamespace(method=method, url=url, **kwargs)
+
+            async def send(self, upstream_request, stream=False):
+                del upstream_request, stream
                 return FakeUpstreamResponse()
 
         upstream_client = FakeUpstreamClient()
@@ -1220,8 +1532,8 @@ class HermesModuleStateTest(unittest.TestCase):
         original_agent = sys.modules.get("agent")
         if original_agent is None:
             agent_stub = types.ModuleType("agent")
-            setattr(agent_stub, "read_envfile", read_envfile)
-            setattr(agent_stub, "write_envfile", write_envfile)
+            agent_stub.read_envfile = read_envfile
+            agent_stub.write_envfile = write_envfile
             sys.modules["agent"] = agent_stub
 
         try:
@@ -1344,15 +1656,20 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_create_module_sets_timezone_and_initializes_state(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
+        agent_stub.set_env = mock.Mock(side_effect=set_env_side_effect)
         sys.modules["agent"] = agent_stub
 
         try:
-            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch.dict(
-                os.environ,
-                {"TIMEZONE": " Europe/Rome "},
-                clear=True,
-            ), mock.patch("subprocess.run") as run_command:
+            with (
+                tempfile.TemporaryDirectory() as temp_dir,
+                working_directory(temp_dir),
+                mock.patch.dict(
+                    os.environ,
+                    {"TIMEZONE": " Europe/Rome "},
+                    clear=True,
+                ),
+                mock.patch("subprocess.run") as run_command,
+            ):
                 run_command.side_effect = [
                     subprocess.CompletedProcess(["podman", "version"], 0, stdout="5.1.2\n"),
                     subprocess.CompletedProcess(["runagent", "discover-smarthost"], 0),
@@ -1368,21 +1685,31 @@ class HermesModuleStateTest(unittest.TestCase):
                 del sys.modules["agent"]
 
         agent_stub.set_env.assert_called_once_with("TIMEZONE", "Europe/Rome")
-        self.assertEqual(run_command.call_args_list[0], mock.call(["podman", "version", "--format", "{{.Client.Version}}"], check=True, capture_output=True, text=True))
+        self.assertEqual(
+            run_command.call_args_list[0],
+            mock.call(
+                ["podman", "version", "--format", "{{.Client.Version}}"], check=True, capture_output=True, text=True
+            ),
+        )
         self.assertEqual(run_command.call_args_list[1], mock.call(["runagent", "discover-smarthost"], check=True))
 
     def test_create_module_rejects_old_podman_before_initializing_state(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
+        agent_stub.set_env = mock.Mock(side_effect=set_env_side_effect)
         sys.modules["agent"] = agent_stub
 
         try:
-            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch.dict(
-                os.environ,
-                {"TIMEZONE": "UTC"},
-                clear=True,
-            ), mock.patch("subprocess.run") as run_command:
+            with (
+                tempfile.TemporaryDirectory() as temp_dir,
+                working_directory(temp_dir),
+                mock.patch.dict(
+                    os.environ,
+                    {"TIMEZONE": "UTC"},
+                    clear=True,
+                ),
+                mock.patch("subprocess.run") as run_command,
+            ):
                 run_command.return_value = subprocess.CompletedProcess(
                     ["podman", "version"],
                     0,
@@ -1400,20 +1727,27 @@ class HermesModuleStateTest(unittest.TestCase):
                 del sys.modules["agent"]
 
         agent_stub.set_env.assert_not_called()
-        run_command.assert_called_once_with(["podman", "version", "--format", "{{.Client.Version}}"], check=True, capture_output=True, text=True)
+        run_command.assert_called_once_with(
+            ["podman", "version", "--format", "{{.Client.Version}}"], check=True, capture_output=True, text=True
+        )
 
     def test_create_module_rejects_symlinked_state_paths(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
+        agent_stub.set_env = mock.Mock(side_effect=set_env_side_effect)
         sys.modules["agent"] = agent_stub
 
         try:
-            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch.dict(
-                os.environ,
-                {"TIMEZONE": "UTC"},
-                clear=True,
-            ), mock.patch("subprocess.run") as run_command:
+            with (
+                tempfile.TemporaryDirectory() as temp_dir,
+                working_directory(temp_dir),
+                mock.patch.dict(
+                    os.environ,
+                    {"TIMEZONE": "UTC"},
+                    clear=True,
+                ),
+                mock.patch("subprocess.run") as run_command,
+            ):
                 run_command.return_value = subprocess.CompletedProcess(
                     ["podman", "version"],
                     0,
@@ -1444,6 +1778,10 @@ class HermesModuleStateTest(unittest.TestCase):
 
         self.assertIn("Restart=always", service_template)
         self.assertNotIn("Restart=on-failure", service_template)
+        # Boot-time resilience: pre-start hooks depend on Redis/ldapproxy.
+        for template in (service_template, auth_template, socket_template):
+            self.assertIn("StartLimitIntervalSec=0", template)
+            self.assertRegex(template, r"RestartSec=\d+")
         self.assertNotIn("EnvironmentFile=-%S/state/hosts", service_template)
         self.assertNotIn("$PODMAN_ADD_HOST_ARGS", service_template)
         self.assertNotIn("--restart=always", service_template)
@@ -1470,7 +1808,9 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("EnvironmentFile=-%S/state/authproxy.env", auth_template)
         self.assertIn("--env-file %S/state/authproxy.env", auth_template)
         self.assertIn("--env-file %S/state/authproxy_secrets.env", auth_template)
-        self.assertIn("AUTH_PROXY_AGENT_REGISTRY=/app/authproxy_agents.json", auth_template)
+        self.assertIn("AUTH_PROXY_AGENT_REGISTRY=/app/authproxy/agents.json", auth_template)
+        self.assertIn("--volume %S/state/authproxy:/app/authproxy:ro,z", auth_template)
+        self.assertNotIn("authproxy_agents.json", auth_template)
         self.assertIn("AUTH_PROXY_PORT=9119", auth_template)
         self.assertIn("--volume %S/state/dashboard-sockets:/sockets:z", auth_template)
         self.assertIn("${HERMES_AGENT_AUTH_IMAGE}", auth_template)
@@ -1500,16 +1840,33 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_hermes_containerfile_uses_expected_base_image(self):
         containerfile = HERMES_CONTAINERFILE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.7.30", containerfile)
-        self.assertIn("RUN cd /opt/hermes && npx agent-browser install --with-deps", containerfile)
+        self.assertIn("FROM docker.io/nousresearch/hermes-agent:v2026.9.7", containerfile)
+        self.assertIn(
+            "RUN cd /opt/hermes && npx --yes agent-browser@0.35.1 install --with-deps",
+            containerfile,
+        )
         self.assertIn("edge-tts==7.2.7", containerfile)
         self.assertIn("lark-oapi==1.5.3", containerfile)
         self.assertIn("qrcode==7.4.2", containerfile)
+        # Reproducible builds: no floating pip or npm versions.
+        for line in containerfile.splitlines():
+            stripped = line.strip().rstrip("\\").strip()
+            if stripped.startswith("RUN pip install") or stripped.startswith("npm install -g") or "@latest" in stripped:
+                self.assertNotIn("@latest", stripped, line)
+        pip_block = containerfile.split("RUN pip install", 1)[1].split("\n\n", 1)[0]
+        for package in pip_block.replace("\\", " ").split():
+            if package.startswith("-") or package in {"--no-cache-dir", "--break-system-packages"}:
+                continue
+            self.assertRegex(package, r"^[A-Za-z0-9_.-]+==[0-9][A-Za-z0-9_.]*$", f"unpinned pip package: {package}")
+        self.assertIn("npm install -g @qwen-code/qwen-code@0.23.2", containerfile)
         self.assertNotIn("COPY containers/hermes/entrypoint.sh /entrypoint.sh", containerfile)
         self.assertNotIn('ENTRYPOINT [ "/entrypoint.sh" ]', containerfile)
         self.assertNotIn("USER hermes", containerfile)
         self.assertIn("USER root", containerfile)
-        self.assertIn("/init", containerfile)
+        self.assertFalse(
+            any(line.lstrip().startswith("ENTRYPOINT") for line in containerfile.splitlines()),
+            "the wrapper must inherit the upstream entrypoint",
+        )
         self.assertIn("COPY favicon.ico /tmp/favicon.ico", containerfile)
         self.assertIn("/opt/hermes/hermes_cli/web_dist/favicon.ico", containerfile)
         self.assertIn("/opt/hermes/web/public/favicon.ico", containerfile)
@@ -1518,12 +1875,16 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertNotIn("COPY patch_dashboard_source.py /opt/hermes/patch_dashboard_source.py", containerfile)
         self.assertNotIn("ns8-web-dist", containerfile)
 
-    def test_build_images_script_builds_hermes_from_repo_root_context(self):
+    def test_build_images_script_builds_hermes_from_its_own_context(self):
         build_script = BUILD_IMAGES_PATH.read_text(encoding="utf-8")
 
         self.assertIn('local containerfile_path="${3:-${context_dir}/Containerfile}"', build_script)
         self.assertIn('--file "${containerfile_path}"', build_script)
-        self.assertIn('build_component_image "hermes-agent-hermes" "." "containers/hermes/Containerfile"', build_script)
+        # Never use the repository root as build context: it drags .git and
+        # ui/node_modules into every buildah invocation.
+        self.assertIn('build_component_image "hermes-agent-hermes" "containers/hermes"', build_script)
+        self.assertNotIn('build_component_image "hermes-agent-hermes" "."', build_script)
+        self.assertTrue((HERMES_CONTAINERFILE_PATH.parent / "favicon.ico").is_file())
 
     def test_auth_containerfile_installs_proxy_runtime(self):
         containerfile = AUTH_CONTAINERFILE_PATH.read_text(encoding="utf-8")
@@ -1550,8 +1911,6 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn('build_component_image "hermes-agent-socket" "containers/socket"', build_script)
         self.assertIn('--label="org.nethserver.tcp-ports-demand=1"', build_script)
 
-    def test_hermes_wrapper_drops_legacy_custom_entrypoint(self):
-        self.assertFalse(HERMES_ENTRYPOINT_PATH.exists())
     def test_build_images_workflow_publishes_release_tag_and_latest_alias_from_main(self):
         workflow = BUILD_IMAGES_WORKFLOW_PATH.read_text(encoding="utf-8")
 
@@ -1578,8 +1937,25 @@ class HermesModuleStateTest(unittest.TestCase):
         self.assertIn("gh extension install NethServer/gh-ns8-release-module", workflow)
         self.assertIn("gh ns8-release-module create --repo ${{ github.repository }} --testing", workflow)
 
-    def test_dashboard_patch_script_removed_from_wrapper(self):
-        self.assertFalse(HERMES_DASHBOARD_PATCH_PATH.exists())
+    def test_ci_harness_supports_yarn4_and_current_ns8(self):
+        for workflow_path in (TEST_WORKFLOW_PATH, RENOVATE_UI_WORKFLOW_PATH):
+            workflow = workflow_path.read_text(encoding="utf-8")
+            self.assertLess(workflow.index("run: corepack enable"), workflow.index("uses: actions/setup-node@v4"))
+
+        digitalocean_workflow = DIGITALOCEAN_WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertNotIn(
+            "${{ github.workspace }}/module/${{ inputs.path }}/tests/outputs/",
+            digitalocean_workflow,
+        )
+
+        runner = TEST_MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn("rfbrowser-stable:20.1.0", runner)
+
+        kickstart = KICKSTART_PATH.read_text(encoding="utf-8")
+        self.assertIn("runagent -m ${module_id} sh -lc", kickstart)
+        self.assertNotIn("runuser -u", kickstart)
+        self.assertEqual(kickstart.count(r"-w '\%{http_code}'"), 5)
+        self.assertNotIn("-w '%{http_code}'", kickstart)
 
     def test_smarthost_changed_event_restarts_active_primary_units(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -1592,11 +1968,11 @@ class HermesModuleStateTest(unittest.TestCase):
 
             write_executable(
                 bin_dir / "runagent",
-                "#!/bin/sh\nprintf 'runagent %s\\n' \"$*\" >> \"$TEST_LOG\"\nexit 0\n",
+                '#!/bin/sh\nprintf \'runagent %s\\n\' "$*" >> "$TEST_LOG"\nexit 0\n',
             )
             write_executable(
                 bin_dir / "systemctl",
-                "#!/bin/sh\nprintf 'systemctl %s\\n' \"$*\" >> \"$TEST_LOG\"\ncase \"$*\" in\n  \"--user is-active --quiet hermes@1.service\")\n    exit 0\n    ;;\n  \"--user is-active --quiet hermes@2.service\")\n    exit 3\n    ;;\n  \"--user restart hermes@1.service\")\n    exit 0\n    ;;\nesac\nexit 1\n",
+                '#!/bin/sh\nprintf \'systemctl %s\\n\' "$*" >> "$TEST_LOG"\ncase "$*" in\n  "--user is-active --quiet hermes@1.service")\n    exit 0\n    ;;\n  "--user is-active --quiet hermes@2.service")\n    exit 3\n    ;;\n  "--user restart hermes@1.service")\n    exit 0\n    ;;\nesac\nexit 1\n',
             )
 
             subprocess.run(
@@ -1621,6 +1997,82 @@ class HermesModuleStateTest(unittest.TestCase):
                 ],
             )
             self.assertNotIn("hermes-agent@", command_log_path.read_text(encoding="utf-8"))
+
+    def test_discover_smarthost_merges_password_into_shared_secrets(self):
+        smarthost = {
+            "enabled": True,
+            "host": "smtp.example.org",
+            "port": 587,
+            "username": "mailer",
+            "password": "smtp-secret",
+            "encrypt_smtp": "starttls",
+            "tls_verify": True,
+        }
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            working_directory(temp_dir),
+            stubbed_agent_module(
+                redis_connect=mock.Mock(return_value="rdb"),
+                get_smarthost_settings=mock.Mock(return_value=smarthost),
+                mset_env=mock.Mock(),
+                read_envfile=read_envfile,
+                write_envfile=write_envfile,
+            ) as agent_stub,
+        ):
+            write_envfile(self.state.SHARED_SECRETS_ENVFILE, {"HERMES_AUTH_SESSION_SECRET": "session"})
+
+            run_script(DISCOVER_SMARTHOST_PATH)
+
+            shared_secrets = read_envfile(self.state.SHARED_SECRETS_ENVFILE)
+            self.assertEqual(shared_secrets["SMTP_PASSWORD"], "smtp-secret")
+            self.assertEqual(shared_secrets["HERMES_AUTH_SESSION_SECRET"], "session")
+            self.assertFalse(Path("secrets.env").exists(), "legacy secrets.env must not be written")
+            self.assertEqual(oct(self.state.SECRETS_DIR.stat().st_mode & 0o777), "0o700")
+            agent_stub.redis_connect.assert_called_once_with(use_replica=True)
+            agent_stub.mset_env.assert_called_once_with(
+                {
+                    "SMTP_ENABLED": "1",
+                    "SMTP_HOST": "smtp.example.org",
+                    "SMTP_PORT": 587,
+                    "SMTP_USERNAME": "mailer",
+                    "SMTP_ENCRYPTION": "starttls",
+                    "SMTP_TLSVERIFY": "1",
+                }
+            )
+
+            # A cleared smarthost password must not linger in the secrets file.
+            smarthost["password"] = ""
+            run_script(DISCOVER_SMARTHOST_PATH)
+            shared_secrets = read_envfile(self.state.SHARED_SECRETS_ENVFILE)
+            self.assertNotIn("SMTP_PASSWORD", shared_secrets)
+            self.assertEqual(shared_secrets["HERMES_AUTH_SESSION_SECRET"], "session")
+
+    def test_migrate_secrets_dir_merges_legacy_shared_secrets(self):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            working_directory(temp_dir),
+            stubbed_agent_module(
+                read_envfile=read_envfile,
+                write_envfile=write_envfile,
+            ),
+        ):
+            write_envfile(Path("secrets.env"), {"SMTP_PASSWORD": "fresh-pass"})
+            write_envfile(
+                self.state.SHARED_SECRETS_ENVFILE, {"HERMES_AUTH_SESSION_SECRET": "session", "SMTP_PASSWORD": "stale"}
+            )
+            write_envfile(Path("agent_3_secrets.env"), {"HERMES_AGENT_SECRET": "three"})
+
+            run_script(MIGRATE_SECRETS_DIR_SCRIPT_PATH)
+
+            shared_secrets = read_envfile(self.state.SHARED_SECRETS_ENVFILE)
+            self.assertEqual(shared_secrets, {"HERMES_AUTH_SESSION_SECRET": "session", "SMTP_PASSWORD": "fresh-pass"})
+            self.assertFalse(Path("secrets.env").exists())
+            self.assertEqual(read_envfile(self.state.SECRETS_DIR / "3.env"), {"HERMES_AGENT_SECRET": "three"})
+            self.assertFalse(Path("agent_3_secrets.env").exists())
+
+            # Re-running with nothing left to migrate is a no-op.
+            run_script(MIGRATE_SECRETS_DIR_SCRIPT_PATH)
+            self.assertEqual(read_envfile(self.state.SHARED_SECRETS_ENVFILE), shared_secrets)
 
     def test_write_private_textfile_rejects_symlink_target(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -1659,28 +2111,28 @@ class HermesModuleStateTest(unittest.TestCase):
             )
             write_envfile(self.state.SHARED_SECRETS_ENVFILE, {"SMTP_PASSWORD": "secret-pass"})
 
-            with mocked_ldap_modules(
-                domains={
-                    "example.org": {
-                        "domain_name": "example.org",
-                        "host": "127.0.0.1",
-                        "port": 389,
-                        "base_dn": "dc=example,dc=org",
-                        "schema": "rfc2307",
-                        "bind_dn": "cn=ldapservice,dc=example,dc=org",
-                        "bind_password": "ldap-secret",
-                    }
-                },
-                users_by_domain={
-                    "example.org": [
-                        {"user": "alice", "display_name": "Alice User", "locked": False}
-                    ]
-                },
-            ), mock.patch.object(self.sync.agent, "read_envfile", side_effect=read_envfile, create=True), mock.patch.object(
-                self.sync.agent,
-                "write_envfile",
-                side_effect=write_envfile,
-                create=True,
+            with (
+                mocked_ldap_modules(
+                    domains={
+                        "example.org": {
+                            "domain_name": "example.org",
+                            "host": "127.0.0.1",
+                            "port": 389,
+                            "base_dn": "dc=example,dc=org",
+                            "schema": "rfc2307",
+                            "bind_dn": "cn=ldapservice,dc=example,dc=org",
+                            "bind_password": "ldap-secret",
+                        }
+                    },
+                    users_by_domain={"example.org": [{"user": "alice", "display_name": "Alice User", "locked": False}]},
+                ),
+                mock.patch.object(self.sync.agent, "read_envfile", side_effect=read_envfile, create=True),
+                mock.patch.object(
+                    self.sync.agent,
+                    "write_envfile",
+                    side_effect=write_envfile,
+                    create=True,
+                ),
             ):
                 self.sync.sync_agent_runtime_files()
 
@@ -1688,7 +2140,7 @@ class HermesModuleStateTest(unittest.TestCase):
             agent_secrets = read_envfile(self.state.SECRETS_DIR / "1.env")
             authproxy_env = read_envfile(Path("authproxy.env"))
             authproxy_secrets = read_envfile(Path("authproxy_secrets.env"))
-            authproxy_agents = json.loads(Path("authproxy_agents.json").read_text(encoding="utf-8"))
+            authproxy_agents = json.loads(self.state.AUTHPROXY_AGENTS_FILE.read_text(encoding="utf-8"))
             shared_secrets = read_envfile(self.state.SHARED_SECRETS_ENVFILE)
 
             self.assertEqual(public_env["AGENT_NAME"], "Alice User")
@@ -1696,10 +2148,9 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertEqual(public_env["AGENT_ALLOWED_USER"], "alice")
             self.assertEqual(public_env["SMTP_HOST"], "smtp.example.org")
             self.assertEqual(public_env["USER_DOMAIN"], "example.org")
-            self.assertEqual(public_env["LDAP_HOST"], "10.0.2.2")
-            self.assertEqual(public_env["LDAP_PORT"], "389")
-            self.assertEqual(public_env["LDAP_BASE_DN"], "dc=example,dc=org")
-            self.assertEqual(public_env["LDAP_SCHEMA"], "rfc2307")
+            # Agents must never learn how to reach the directory service.
+            self.assertFalse([key for key in public_env if key.startswith("LDAP_")])
+            self.assertFalse([key for key in agent_secrets if key.startswith("LDAP_")])
             self.assertEqual(
                 set(public_env),
                 {
@@ -1708,10 +2159,6 @@ class HermesModuleStateTest(unittest.TestCase):
                     "AGENT_NAME",
                     "AGENT_ROLE",
                     "BASE_VIRTUALHOST",
-                    "LDAP_BASE_DN",
-                    "LDAP_HOST",
-                    "LDAP_PORT",
-                    "LDAP_SCHEMA",
                     "SMTP_ENABLED",
                     "SMTP_HOST",
                     "TIMEZONE",
@@ -1719,8 +2166,6 @@ class HermesModuleStateTest(unittest.TestCase):
                     "USER_DOMAIN",
                 },
             )
-            self.assertEqual(agent_secrets["LDAP_BIND_DN"], "cn=ldapservice,dc=example,dc=org")
-            self.assertEqual(agent_secrets["LDAP_BIND_PASSWORD"], "ldap-secret")
             self.assertEqual(agent_secrets["SMTP_PASSWORD"], "secret-pass")
             self.assertTrue(agent_secrets["HERMES_AGENT_SECRET"])
             self.assertTrue(agent_secrets["API_SERVER_KEY"])
@@ -1729,8 +2174,6 @@ class HermesModuleStateTest(unittest.TestCase):
                 {
                     "API_SERVER_KEY",
                     "HERMES_AGENT_SECRET",
-                    "LDAP_BIND_DN",
-                    "LDAP_BIND_PASSWORD",
                     "SMTP_PASSWORD",
                 },
             )
@@ -1779,16 +2222,19 @@ class HermesModuleStateTest(unittest.TestCase):
             )
             write_envfile(self.state.SHARED_SECRETS_ENVFILE, {"SMTP_PASSWORD": "secret-pass"})
 
-            with mock.patch.object(
-                self.sync.agent,
-                "read_envfile",
-                side_effect=strict_read_envfile,
-                create=True,
-            ), mock.patch.object(
-                self.sync.agent,
-                "write_envfile",
-                side_effect=write_envfile,
-                create=True,
+            with (
+                mock.patch.object(
+                    self.sync.agent,
+                    "read_envfile",
+                    side_effect=strict_read_envfile,
+                    create=True,
+                ),
+                mock.patch.object(
+                    self.sync.agent,
+                    "write_envfile",
+                    side_effect=write_envfile,
+                    create=True,
+                ),
             ):
                 self.sync.sync_agent_runtime_files(agent_id=1)
 
@@ -1818,16 +2264,19 @@ class HermesModuleStateTest(unittest.TestCase):
             write_envfile(self.state.ENVIRONMENT_FILE, {"TIMEZONE": "UTC"})
             write_envfile(self.state.SHARED_SECRETS_ENVFILE, {})
 
-            with mock.patch.object(
-                self.sync.agent,
-                "read_envfile",
-                side_effect=strict_read_envfile,
-                create=True,
-            ), mock.patch.object(
-                self.sync.agent,
-                "write_envfile",
-                side_effect=write_envfile,
-                create=True,
+            with (
+                mock.patch.object(
+                    self.sync.agent,
+                    "read_envfile",
+                    side_effect=strict_read_envfile,
+                    create=True,
+                ),
+                mock.patch.object(
+                    self.sync.agent,
+                    "write_envfile",
+                    side_effect=write_envfile,
+                    create=True,
+                ),
             ):
                 self.sync.sync_agent_runtime_files()
 
@@ -1856,16 +2305,19 @@ class HermesModuleStateTest(unittest.TestCase):
             )
             write_envfile(self.state.SHARED_SECRETS_ENVFILE, {"SMTP_PASSWORD": "old-pass"})
 
-            with mock.patch.object(
-                self.sync.agent,
-                "read_envfile",
-                side_effect=strict_read_envfile,
-                create=True,
-            ), mock.patch.object(
-                self.sync.agent,
-                "write_envfile",
-                side_effect=write_envfile,
-                create=True,
+            with (
+                mock.patch.object(
+                    self.sync.agent,
+                    "read_envfile",
+                    side_effect=strict_read_envfile,
+                    create=True,
+                ),
+                mock.patch.object(
+                    self.sync.agent,
+                    "write_envfile",
+                    side_effect=write_envfile,
+                    create=True,
+                ),
             ):
                 self.sync.sync_agent_runtime_files(agent_id=3)
                 first_sync_secrets = read_envfile(self.state.SECRETS_DIR / "3.env")
@@ -1909,11 +2361,15 @@ class HermesModuleStateTest(unittest.TestCase):
                 }
             )
 
-            with mock.patch.dict(
-                os.environ,
-                {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"},
-                clear=False,
-            ), mock.patch("sys.stdin", io.StringIO(request)), mock.patch("subprocess.run") as run_command:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"},
+                    clear=False,
+                ),
+                mock.patch("sys.stdin", io.StringIO(request)),
+                mock.patch("subprocess.run") as run_command,
+            ):
                 runpy.run_path(str(SEED_AGENT_HOME_ACTION_PATH), run_name="__main__")
 
             self.assertEqual(run_command.call_count, 2)
@@ -2010,15 +2466,17 @@ class HermesModuleStateTest(unittest.TestCase):
             self.assertEqual((data_dir / "SOUL.md").read_text(encoding="utf-8"), "customized soul\n")
             self.assertEqual((data_dir / ".env").read_text(encoding="utf-8"), "CUSTOM=true\n")
 
-
     def test_ensure_agent_home_ownership_uses_image_hermes_uid(self):
-        with mock.patch.dict(
-            os.environ,
-            {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"},
-            clear=False,
-        ), mock.patch("sys.argv", [str(ENSURE_AGENT_HOME_OWNERSHIP_PATH), "--agent-id", "2"]), mock.patch(
-            "subprocess.run"
-        ) as run_mock, self.assertRaises(SystemExit) as exit_context:
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"},
+                clear=False,
+            ),
+            mock.patch("sys.argv", [str(ENSURE_AGENT_HOME_OWNERSHIP_PATH), "--agent-id", "2"]),
+            mock.patch("subprocess.run") as run_mock,
+            self.assertRaises(SystemExit) as exit_context,
+        ):
             runpy.run_path(str(ENSURE_AGENT_HOME_OWNERSHIP_PATH), run_name="__main__")
 
         self.assertEqual(exit_context.exception.code, 0)
@@ -2035,10 +2493,10 @@ class HermesModuleStateTest(unittest.TestCase):
         ownership_script = command[-1]
         self.assertIn("id -u hermes", ownership_script)
         self.assertIn("id -g hermes", ownership_script)
-        self.assertIn("chown \"$uid:$gid\" \"$root_dir\"", ownership_script)
+        self.assertIn('chown "$uid:$gid" "$root_dir"', ownership_script)
         self.assertIn("chown -R", ownership_script)
-        self.assertIn("root_dir=\"/opt/agents\"", ownership_script)
-        self.assertIn("agent_dir=\"${root_dir}/${AGENT_ID}\"", ownership_script)
+        self.assertIn('root_dir="/opt/agents"', ownership_script)
+        self.assertIn('agent_dir="${root_dir}/${AGENT_ID}"', ownership_script)
         self.assertNotIn("10000", ownership_script)
         self.assertNotIn("hermes update", ownership_script)
 
@@ -2050,7 +2508,9 @@ class HermesModuleStateTest(unittest.TestCase):
             )
             self.state.ensure_private_directory(Path("agents") / "3")
 
-            with mock.patch("subprocess.run", side_effect=lambda *args, **kwargs: types.SimpleNamespace(returncode=0)) as run_mock:
+            with mock.patch(
+                "subprocess.run", side_effect=lambda *args, **kwargs: types.SimpleNamespace(returncode=0)
+            ) as run_mock:
                 runpy.run_path(str(UPDATE_OWNERSHIP_SCRIPT_PATH), run_name="__main__")
 
             logged_commands = [call.args[0] for call in run_mock.call_args_list]
@@ -2124,13 +2584,18 @@ class HermesModuleStateTest(unittest.TestCase):
             request = json.dumps({"agents": [{"id": 1}]})
             stderr = io.StringIO()
 
-            with mock.patch.dict(
-                os.environ,
-                {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"},
-                clear=False,
-            ), mock.patch("sys.stdin", io.StringIO(request)), mock.patch("sys.stderr", stderr), self.assertRaisesRegex(
-                ValueError,
-                "agent env file not found",
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"},
+                    clear=False,
+                ),
+                mock.patch("sys.stdin", io.StringIO(request)),
+                mock.patch("sys.stderr", stderr),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "agent env file not found",
+                ),
             ):
                 runpy.run_path(str(SEED_AGENT_HOME_ACTION_PATH), run_name="__main__")
 
@@ -2142,10 +2607,15 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_create_module_podman_version_check_logs_requirement_failures(self):
         stderr = io.StringIO()
 
-        with mock.patch("sys.stdin", io.StringIO("{}")), mock.patch("sys.stderr", stderr), mock.patch(
-            "subprocess.run",
-            return_value=types.SimpleNamespace(stdout="5.0.0\n"),
-        ), self.assertRaisesRegex(RuntimeError, "Podman 5.1 or newer"):
+        with (
+            mock.patch("sys.stdin", io.StringIO("{}")),
+            mock.patch("sys.stderr", stderr),
+            mock.patch(
+                "subprocess.run",
+                return_value=types.SimpleNamespace(stdout="5.0.0\n"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "Podman 5.1 or newer"),
+        ):
             runpy.run_path(str(CREATE_MODULE_ACTION_DIR / "05check-podman-version"), run_name="__main__")
 
         self.assertIn(
@@ -2156,8 +2626,8 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_persist_shared_env_tracks_previous_lets_encrypt_on_host_change(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
-        setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
+        agent_stub.set_env = mock.Mock(side_effect=set_env_side_effect)
+        agent_stub.unset_env = mock.Mock(side_effect=unset_env_side_effect)
         sys.modules["agent"] = agent_stub
 
         try:
@@ -2169,15 +2639,18 @@ class HermesModuleStateTest(unittest.TestCase):
                 }
             )
 
-            with mock.patch.dict(
-                os.environ,
-                {
-                    "TIMEZONE": "UTC",
-                    self.state.BASE_VIRTUALHOST_ENV: "old.example.org",
-                    self.state.LETS_ENCRYPT_ENV: "true",
-                },
-                clear=False,
-            ), mock.patch("sys.stdin", io.StringIO(request)):
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "TIMEZONE": "UTC",
+                        self.state.BASE_VIRTUALHOST_ENV: "old.example.org",
+                        self.state.LETS_ENCRYPT_ENV: "true",
+                    },
+                    clear=False,
+                ),
+                mock.patch("sys.stdin", io.StringIO(request)),
+            ):
                 runpy.run_path(str(PERSIST_SHARED_ENV_PATH), run_name="__main__")
 
             self.assertIn(
@@ -2206,12 +2679,12 @@ class HermesModuleStateTest(unittest.TestCase):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
+        agent_tasks_stub.run = mock.Mock(return_value={"exit_code": 0})
 
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
-        setattr(agent_stub, "assert_exp", mock.Mock())
-        setattr(agent_stub, "tasks", agent_tasks_stub)
+        agent_stub.resolve_agent_id = mock.Mock(return_value="module/traefik1")
+        agent_stub.assert_exp = mock.Mock()
+        agent_stub.tasks = agent_tasks_stub
         sys.modules["agent"] = agent_stub
         sys.modules["agent.tasks"] = agent_tasks_stub
 
@@ -2236,18 +2709,21 @@ class HermesModuleStateTest(unittest.TestCase):
                     }
                 )
 
-                with mock.patch.dict(
-                    os.environ,
-                    {
-                        "MODULE_ID": "hermes-agent1",
-                        "TCP_PORT": "20001",
-                        self.state.BASE_VIRTUALHOST_ENV: "new.example.org",
-                        self.state.BASE_VIRTUALHOST_PREVIOUS_ENV: "old.example.org",
-                        self.state.LETS_ENCRYPT_ENV: "true",
-                        self.state.LETS_ENCRYPT_PREVIOUS_ENV: "true",
-                    },
-                    clear=False,
-                ), mock.patch("sys.stdin", io.StringIO(request)):
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "MODULE_ID": "hermes-agent1",
+                            "TCP_PORT": "20001",
+                            self.state.BASE_VIRTUALHOST_ENV: "new.example.org",
+                            self.state.BASE_VIRTUALHOST_PREVIOUS_ENV: "old.example.org",
+                            self.state.LETS_ENCRYPT_ENV: "true",
+                            self.state.LETS_ENCRYPT_PREVIOUS_ENV: "true",
+                        },
+                        clear=False,
+                    ),
+                    mock.patch("sys.stdin", io.StringIO(request)),
+                ):
                     runpy.run_path(str(RECONCILE_DESIRED_ROUTES_PATH), run_name="__main__")
 
                 self.assertEqual(
@@ -2289,12 +2765,12 @@ class HermesModuleStateTest(unittest.TestCase):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
+        agent_tasks_stub.run = mock.Mock(return_value={"exit_code": 0})
 
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
-        setattr(agent_stub, "assert_exp", mock.Mock())
-        setattr(agent_stub, "tasks", agent_tasks_stub)
+        agent_stub.resolve_agent_id = mock.Mock(return_value="module/traefik1")
+        agent_stub.assert_exp = mock.Mock()
+        agent_stub.tasks = agent_tasks_stub
         sys.modules["agent"] = agent_stub
         sys.modules["agent.tasks"] = agent_tasks_stub
 
@@ -2320,17 +2796,20 @@ class HermesModuleStateTest(unittest.TestCase):
                     }
                 )
 
-                with mock.patch.dict(
-                    os.environ,
-                    {
-                        "MODULE_ID": "hermes-agent1",
-                        "TCP_PORT": "20001",
-                        self.state.BASE_VIRTUALHOST_ENV: "agents.example.org",
-                        self.state.LETS_ENCRYPT_ENV: "false",
-                        self.state.LETS_ENCRYPT_PREVIOUS_ENV: "true",
-                    },
-                    clear=False,
-                ), mock.patch("sys.stdin", io.StringIO(request)):
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "MODULE_ID": "hermes-agent1",
+                            "TCP_PORT": "20001",
+                            self.state.BASE_VIRTUALHOST_ENV: "agents.example.org",
+                            self.state.LETS_ENCRYPT_ENV: "false",
+                            self.state.LETS_ENCRYPT_PREVIOUS_ENV: "true",
+                        },
+                        clear=False,
+                    ),
+                    mock.patch("sys.stdin", io.StringIO(request)),
+                ):
                     runpy.run_path(str(RECONCILE_DESIRED_ROUTES_PATH), run_name="__main__")
 
                 self.assertEqual(
@@ -2350,52 +2829,6 @@ class HermesModuleStateTest(unittest.TestCase):
                         ),
                     ],
                 )
-        finally:
-            if original_agent is not None:
-                sys.modules["agent"] = original_agent
-            else:
-                del sys.modules["agent"]
-
-            if original_agent_tasks is not None:
-                sys.modules["agent.tasks"] = original_agent_tasks
-            elif "agent.tasks" in sys.modules:
-                del sys.modules["agent.tasks"]
-
-    def test_remove_deleted_routes_is_a_noop(self):
-        original_agent = sys.modules.get("agent")
-        original_agent_tasks = sys.modules.get("agent.tasks")
-        agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
-
-        agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
-        setattr(agent_stub, "assert_exp", mock.Mock())
-        setattr(agent_stub, "tasks", agent_tasks_stub)
-        sys.modules["agent"] = agent_stub
-        sys.modules["agent.tasks"] = agent_tasks_stub
-
-        try:
-            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
-                self.state.write_jsonfile(
-                    Path("agents") / "1" / "metadata.json",
-                    {"id": 1, "name": "Old Agent", "role": "developer", "status": "start"},
-                )
-
-                with mock.patch.dict(
-                    os.environ,
-                    {
-                        "MODULE_ID": "hermes-agent1",
-                        self.state.BASE_VIRTUALHOST_ENV: "agents.example.org",
-                        self.state.LETS_ENCRYPT_ENV: "true",
-                    },
-                    clear=False,
-                ), mock.patch("sys.stdin", io.StringIO(json.dumps({"agents": []}))):
-                    runpy.run_path(
-                        str(CONFIGURE_MODULE_ACTION_DIR / "30remove-deleted-routes"),
-                        run_name="__main__",
-                    )
-
-                agent_tasks_stub.run.assert_not_called()
         finally:
             if original_agent is not None:
                 sys.modules["agent"] = original_agent
@@ -2427,11 +2860,14 @@ class HermesModuleStateTest(unittest.TestCase):
             )
             write_envfile(self.state.SHARED_SECRETS_ENVFILE, {"SMTP_PASSWORD": "new-pass"})
 
-            with mock.patch.object(self.sync.agent, "read_envfile", side_effect=read_envfile, create=True), mock.patch.object(
-                self.sync.agent,
-                "write_envfile",
-                side_effect=write_envfile,
-                create=True,
+            with (
+                mock.patch.object(self.sync.agent, "read_envfile", side_effect=read_envfile, create=True),
+                mock.patch.object(
+                    self.sync.agent,
+                    "write_envfile",
+                    side_effect=write_envfile,
+                    create=True,
+                ),
             ):
                 self.sync.sync_agent_runtime_files(agent_id=3)
 
@@ -2445,15 +2881,15 @@ class HermesModuleStateTest(unittest.TestCase):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
+        agent_tasks_stub.run = mock.Mock(return_value={"exit_code": 0})
 
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
-        setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
-        setattr(agent_stub, "bind_user_domains", mock.Mock(return_value=True))
-        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value=None))
-        setattr(agent_stub, "assert_exp", mock.Mock())
-        setattr(agent_stub, "tasks", agent_tasks_stub)
+        agent_stub.set_env = mock.Mock(side_effect=set_env_side_effect)
+        agent_stub.unset_env = mock.Mock(side_effect=unset_env_side_effect)
+        agent_stub.bind_user_domains = mock.Mock(return_value=True)
+        agent_stub.resolve_agent_id = mock.Mock(return_value=None)
+        agent_stub.assert_exp = mock.Mock()
+        agent_stub.tasks = agent_tasks_stub
         sys.modules["agent"] = agent_stub
         sys.modules["agent.tasks"] = agent_tasks_stub
 
@@ -2487,19 +2923,22 @@ class HermesModuleStateTest(unittest.TestCase):
                                 "status": "start",
                                 "allowed_user": "",
                             }
-                        ]
+                        ],
                     }
                 )
 
-                with mock.patch.dict(
-                    os.environ,
-                    {
-                        "MODULE_ID": "hermes-agent1",
-                        "TIMEZONE": "UTC",
-                        "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
-                    },
-                    clear=True,
-                ), mock.patch("subprocess.run", side_effect=run_side_effect) as run_command:
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "MODULE_ID": "hermes-agent1",
+                            "TIMEZONE": "UTC",
+                            "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
+                        },
+                        clear=True,
+                    ),
+                    mock.patch("subprocess.run", side_effect=run_side_effect) as run_command,
+                ):
                     run_action(CONFIGURE_MODULE_ACTION_DIR, request)
 
                 self.assertEqual(
@@ -2543,7 +2982,11 @@ class HermesModuleStateTest(unittest.TestCase):
                 self.assertIn(["systemctl", "--user", "start", "hermes@1.service"], command_list)
                 self.assertIn(["systemctl", "--user", "disable", "--now", "hermes-auth.service"], command_list)
                 self.assertIn(["podman", "rm", "--force", "hermes-auth"], command_list)
-                seed_commands = [command for command in command_list if command[:2] == ["podman", "run"] and "hermes-agent-seed-1" in command]
+                seed_commands = [
+                    command
+                    for command in command_list
+                    if command[:2] == ["podman", "run"] and "hermes-agent-seed-1" in command
+                ]
                 self.assertEqual(len(seed_commands), 1)
                 self.assertIn("hermes-agent-seed-1", seed_commands[0])
                 self.assertIn(str((Path(temp_dir) / "agents" / "1" / "agent.env").resolve()), seed_commands[0])
@@ -2559,19 +3002,124 @@ class HermesModuleStateTest(unittest.TestCase):
             elif "agent.tasks" in sys.modules:
                 del sys.modules["agent.tasks"]
 
+    def run_reconcile_agent_services(self, active_units=None):
+        """Run step 95 once; returns the list of executed commands."""
+        active_units = set(active_units or [])
+        commands = []
+
+        def run_side_effect(command, **kwargs):
+            commands.append(command)
+            if command[:4] == ["systemctl", "--user", "is-active", "--quiet"]:
+                return types.SimpleNamespace(returncode=0 if command[4] in active_units else 3)
+            return types.SimpleNamespace(returncode=0)
+
+        with (
+            stubbed_agent_module(unset_env=mock.Mock()),
+            mock.patch("subprocess.run", side_effect=run_side_effect),
+            mock.patch("sys.stdin", io.StringIO("{}")),
+        ):
+            runpy.run_path(str(RECONCILE_AGENT_SERVICES_PATH), run_name="__main__")
+
+        return commands
+
+    def test_reconcile_agent_services_restarts_only_changed_or_inactive_agents(self):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            working_directory(temp_dir),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "MODULE_ID": "hermes-agent1",
+                    "BASE_VIRTUALHOST": "agents.example.org",
+                    "TCP_PORT": "20001",
+                    "HERMES_AGENT_HERMES_IMAGE": "img:1",
+                },
+                clear=True,
+            ),
+        ):
+            for agent_id, agent_name, allowed_user in ((1, "Agent One", "alice"), (2, "Agent Two", "bob")):
+                self.state.write_jsonfile(
+                    Path("agents") / str(agent_id) / "metadata.json",
+                    {
+                        "id": agent_id,
+                        "name": agent_name,
+                        "role": "default",
+                        "status": "start",
+                        "allowed_user": allowed_user,
+                    },
+                )
+                write_envfile(Path("agents") / str(agent_id) / "agent.env", {"AGENT_ID": str(agent_id)})
+                write_envfile(self.state.SECRETS_DIR / f"{agent_id}.env", {"API_SERVER_KEY": f"key{agent_id}"})
+            write_envfile(Path("authproxy.env"), {"USER_DOMAIN": "example.org"})
+            write_envfile(Path("authproxy_secrets.env"), {"HERMES_AUTH_SESSION_SECRET": "s"})
+            self.state.write_jsonfile(self.state.AUTHPROXY_AGENTS_FILE, {"agents": []})
+
+            all_units = {
+                "hermes@1.service",
+                "hermes-socket@1.service",
+                "hermes@2.service",
+                "hermes-socket@2.service",
+                "hermes-auth.service",
+            }
+
+            # First run: nothing recorded yet, everything is (re)started.
+            first = self.run_reconcile_agent_services(active_units=all_units)
+            self.assertIn(["systemctl", "--user", "start", "hermes@1.service"], first)
+            self.assertIn(["systemctl", "--user", "start", "hermes@2.service"], first)
+            self.assertIn(["systemctl", "--user", "start", "hermes-auth.service"], first)
+            fingerprints = self.state.read_jsonfile(self.state.RUNTIME_FINGERPRINTS_FILE)
+            self.assertEqual(set(fingerprints["agents"]), {"1", "2"})
+            self.assertTrue(fingerprints["auth"])
+
+            # Second run with identical inputs and everything active: no restarts.
+            second = self.run_reconcile_agent_services(active_units=all_units)
+            self.assertNotIn(["systemctl", "--user", "stop", "hermes@1.service"], second)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes@1.service"], second)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes@2.service"], second)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes-auth.service"], second)
+            self.assertIn(["systemctl", "--user", "enable", "hermes@1.service"], second)
+
+            # Agent 2 changed its generated env: only agent 2 is bounced.
+            write_envfile(Path("agents") / "2" / "agent.env", {"AGENT_ID": "2", "AGENT_NAME": "Renamed"})
+            third = self.run_reconcile_agent_services(active_units=all_units)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes@1.service"], third)
+            self.assertIn(["systemctl", "--user", "stop", "hermes@2.service"], third)
+            self.assertIn(["systemctl", "--user", "start", "hermes@2.service"], third)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes-auth.service"], third)
+
+            # Unchanged but not running (e.g. crashed unit): started again.
+            fourth = self.run_reconcile_agent_services(active_units=all_units - {"hermes@1.service"})
+            self.assertIn(["systemctl", "--user", "start", "hermes@1.service"], fourth)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes@2.service"], fourth)
+
+            # Auth proxy inputs changed: only hermes-auth restarts.
+            self.state.write_jsonfile(self.state.AUTHPROXY_AGENTS_FILE, {"agents": [{"id": 1}]})
+            fifth = self.run_reconcile_agent_services(active_units=all_units)
+            self.assertIn(["systemctl", "--user", "start", "hermes-auth.service"], fifth)
+            self.assertNotIn(["systemctl", "--user", "start", "hermes@1.service"], fifth)
+
+            # Stopping agent 1 drops its fingerprint and tears the runtime down.
+            self.state.write_jsonfile(
+                Path("agents") / "1" / "metadata.json",
+                {"id": 1, "name": "Agent One", "role": "default", "status": "stop", "allowed_user": "alice"},
+            )
+            sixth = self.run_reconcile_agent_services(active_units=all_units)
+            self.assertIn(["systemctl", "--user", "disable", "--now", "hermes@1.service"], sixth)
+            self.assertEqual(set(self.state.read_jsonfile(self.state.RUNTIME_FINGERPRINTS_FILE)["agents"]), {"2"})
+
     def test_configure_module_sets_traefik_routes_for_dashboard(self):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
+        agent_tasks_stub.run = mock.Mock(return_value={"exit_code": 0})
 
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
-        setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
-        setattr(agent_stub, "bind_user_domains", mock.Mock(return_value=True))
-        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
-        setattr(agent_stub, "assert_exp", mock.Mock())
-        setattr(agent_stub, "tasks", agent_tasks_stub)
+        agent_stub.set_env = mock.Mock(side_effect=set_env_side_effect)
+        agent_stub.unset_env = mock.Mock(side_effect=unset_env_side_effect)
+        agent_stub.bind_user_domains = mock.Mock(return_value=True)
+        agent_stub.resolve_agent_id = mock.Mock(return_value="module/traefik1")
+        agent_stub.assert_exp = mock.Mock()
+        agent_stub.tasks = agent_tasks_stub
         sys.modules["agent"] = agent_stub
         sys.modules["agent.tasks"] = agent_tasks_stub
 
@@ -2603,37 +3151,41 @@ class HermesModuleStateTest(unittest.TestCase):
                     }
                 )
 
-                with mocked_ldap_modules(
-                    domains={
-                        "example.org": {
-                            "domain_name": "example.org",
-                            "host": "127.0.0.1",
-                            "port": 389,
-                            "base_dn": "dc=example,dc=org",
-                            "schema": "rfc2307",
-                            "bind_dn": "cn=ldapservice,dc=example,dc=org",
-                            "bind_password": "ldap-secret",
-                        }
-                    },
-                    users_by_domain={
-                        "example.org": [
-                            {"user": "alice", "display_name": "Alice User", "locked": False}
-                        ]
-                    },
-                ), mock.patch.dict(
-                    os.environ,
-                    {
-                        "MODULE_ID": "hermes-agent1",
-                        "TIMEZONE": "UTC",
-                        "TCP_PORT": "20001",
-                        "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
-                    },
-                    clear=False,
-                ), mock.patch(
-                    "subprocess.run",
-                    side_effect=lambda command, **kwargs: emulate_sync_agent_runtime(self.sync, command)
-                    if command[:2] == ["runagent", "sync-agent-runtime"]
-                    else types.SimpleNamespace(returncode=0),
+                with (
+                    mocked_ldap_modules(
+                        domains={
+                            "example.org": {
+                                "domain_name": "example.org",
+                                "host": "127.0.0.1",
+                                "port": 389,
+                                "base_dn": "dc=example,dc=org",
+                                "schema": "rfc2307",
+                                "bind_dn": "cn=ldapservice,dc=example,dc=org",
+                                "bind_password": "ldap-secret",
+                            }
+                        },
+                        users_by_domain={
+                            "example.org": [{"user": "alice", "display_name": "Alice User", "locked": False}]
+                        },
+                    ),
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "MODULE_ID": "hermes-agent1",
+                            "TIMEZONE": "UTC",
+                            "TCP_PORT": "20001",
+                            "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
+                        },
+                        clear=False,
+                    ),
+                    mock.patch(
+                        "subprocess.run",
+                        side_effect=lambda command, **kwargs: (
+                            emulate_sync_agent_runtime(self.sync, command)
+                            if command[:2] == ["runagent", "sync-agent-runtime"]
+                            else types.SimpleNamespace(returncode=0)
+                        ),
+                    ),
                 ):
                     run_action(CONFIGURE_MODULE_ACTION_DIR, request)
 
@@ -2673,15 +3225,15 @@ class HermesModuleStateTest(unittest.TestCase):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
+        agent_tasks_stub.run = mock.Mock(return_value={"exit_code": 0})
 
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
-        setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
-        setattr(agent_stub, "bind_user_domains", mock.Mock(return_value=True))
-        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value=None))
-        setattr(agent_stub, "assert_exp", mock.Mock())
-        setattr(agent_stub, "tasks", agent_tasks_stub)
+        agent_stub.set_env = mock.Mock(side_effect=set_env_side_effect)
+        agent_stub.unset_env = mock.Mock(side_effect=unset_env_side_effect)
+        agent_stub.bind_user_domains = mock.Mock(return_value=True)
+        agent_stub.resolve_agent_id = mock.Mock(return_value=None)
+        agent_stub.assert_exp = mock.Mock()
+        agent_stub.tasks = agent_tasks_stub
         sys.modules["agent"] = agent_stub
         sys.modules["agent.tasks"] = agent_tasks_stub
 
@@ -2703,19 +3255,24 @@ class HermesModuleStateTest(unittest.TestCase):
                     }
                 )
 
-                with mock.patch.dict(
-                    os.environ,
-                    {
-                        "MODULE_ID": "hermes-agent1",
-                        "TIMEZONE": "UTC",
-                        "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
-                    },
-                    clear=True,
-                ), mock.patch(
-                    "subprocess.run",
-                    side_effect=lambda command, **kwargs: emulate_sync_agent_runtime(self.sync, command)
-                    if command[:2] == ["runagent", "sync-agent-runtime"]
-                    else types.SimpleNamespace(returncode=0),
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "MODULE_ID": "hermes-agent1",
+                            "TIMEZONE": "UTC",
+                            "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
+                        },
+                        clear=True,
+                    ),
+                    mock.patch(
+                        "subprocess.run",
+                        side_effect=lambda command, **kwargs: (
+                            emulate_sync_agent_runtime(self.sync, command)
+                            if command[:2] == ["runagent", "sync-agent-runtime"]
+                            else types.SimpleNamespace(returncode=0)
+                        ),
+                    ),
                 ):
                     run_action(CONFIGURE_MODULE_ACTION_DIR, request)
 
@@ -2737,15 +3294,15 @@ class HermesModuleStateTest(unittest.TestCase):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
+        agent_tasks_stub.run = mock.Mock(return_value={"exit_code": 0})
 
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
-        setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
-        setattr(agent_stub, "bind_user_domains", mock.Mock(return_value=True))
-        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
-        setattr(agent_stub, "assert_exp", mock.Mock())
-        setattr(agent_stub, "tasks", agent_tasks_stub)
+        agent_stub.set_env = mock.Mock(side_effect=set_env_side_effect)
+        agent_stub.unset_env = mock.Mock(side_effect=unset_env_side_effect)
+        agent_stub.bind_user_domains = mock.Mock(return_value=True)
+        agent_stub.resolve_agent_id = mock.Mock(return_value="module/traefik1")
+        agent_stub.assert_exp = mock.Mock()
+        agent_stub.tasks = agent_tasks_stub
         sys.modules["agent"] = agent_stub
         sys.modules["agent.tasks"] = agent_tasks_stub
 
@@ -2784,16 +3341,19 @@ class HermesModuleStateTest(unittest.TestCase):
                     }
                 )
 
-                with mock.patch.dict(
-                    os.environ,
-                    {
-                        "MODULE_ID": "hermes-agent1",
-                        "TIMEZONE": "UTC",
-                        "BASE_VIRTUALHOST": "agents.example.org",
-                        "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
-                    },
-                    clear=False,
-                ), mock.patch("subprocess.run", side_effect=run_side_effect):
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "MODULE_ID": "hermes-agent1",
+                            "TIMEZONE": "UTC",
+                            "BASE_VIRTUALHOST": "agents.example.org",
+                            "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test",
+                        },
+                        clear=False,
+                    ),
+                    mock.patch("subprocess.run", side_effect=run_side_effect),
+                ):
                     run_action(CONFIGURE_MODULE_ACTION_DIR, request)
 
                 self.assertEqual(
@@ -2823,39 +3383,47 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_restore_copyenv_restores_only_allowlisted_shared_environment(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
-        setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
+        agent_stub.set_env = mock.Mock(side_effect=set_env_side_effect)
+        agent_stub.unset_env = mock.Mock(side_effect=unset_env_side_effect)
         sys.modules["agent"] = agent_stub
 
         try:
-            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch.dict(
-                os.environ,
-                {"TIMEZONE": "UTC"},
-                clear=True,
-            ), mock.patch(
-                "sys.stdin",
-                io.StringIO(
-                    json.dumps(
-                        {
-                            "environment": {
-                                "TIMEZONE": " Europe/Rome ",
-                                "BASE_VIRTUALHOST": " Agents.Example.ORG ",
-                                "USER_DOMAIN": " Example.Org ",
-                                "LETS_ENCRYPT": "TrUe",
-                                "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:restored",
+            with (
+                tempfile.TemporaryDirectory() as temp_dir,
+                working_directory(temp_dir),
+                mock.patch.dict(
+                    os.environ,
+                    {"TIMEZONE": "UTC"},
+                    clear=True,
+                ),
+                mock.patch(
+                    "sys.stdin",
+                    io.StringIO(
+                        json.dumps(
+                            {
+                                "environment": {
+                                    "TIMEZONE": " Europe/Rome ",
+                                    "BASE_VIRTUALHOST": " Agents.Example.ORG ",
+                                    "USER_DOMAIN": " Example.Org ",
+                                    "LETS_ENCRYPT": "TrUe",
+                                    "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:restored",
+                                }
                             }
-                        }
-                    )
+                        )
+                    ),
                 ),
             ):
                 runpy.run_path(str(RESTORE_COPY_ENV_PATH), run_name="__main__")
 
-                self.assertEqual(read_envfile("environment"), {
-                    "TIMEZONE": "Europe/Rome",
-                    "BASE_VIRTUALHOST": "agents.example.org",
-                    "USER_DOMAIN": "example.org",
-                    "LETS_ENCRYPT": "true",
-                })
+                self.assertEqual(
+                    read_envfile("environment"),
+                    {
+                        "TIMEZONE": "Europe/Rome",
+                        "BASE_VIRTUALHOST": "agents.example.org",
+                        "USER_DOMAIN": "example.org",
+                        "LETS_ENCRYPT": "true",
+                    },
+                )
                 self.assertNotIn(
                     mock.call("HERMES_AGENT_HERMES_IMAGE", "quay.io/example/hermes:restored"),
                     agent_stub.set_env.call_args_list,
@@ -2869,17 +3437,19 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_restore_copyenv_rejects_missing_environment(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
-        setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
+        agent_stub.set_env = mock.Mock(side_effect=set_env_side_effect)
+        agent_stub.unset_env = mock.Mock(side_effect=unset_env_side_effect)
         sys.modules["agent"] = agent_stub
 
         try:
             stderr = io.StringIO()
-            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch(
-                "sys.stdin", io.StringIO("{}")
-            ), mock.patch(
-                "sys.stderr", stderr
-            ), self.assertRaisesRegex(ValueError, "restore environment"):
+            with (
+                tempfile.TemporaryDirectory() as temp_dir,
+                working_directory(temp_dir),
+                mock.patch("sys.stdin", io.StringIO("{}")),
+                mock.patch("sys.stderr", stderr),
+                self.assertRaisesRegex(ValueError, "restore environment"),
+            ):
                 runpy.run_path(str(RESTORE_COPY_ENV_PATH), run_name="__main__")
 
             self.assertIn(
@@ -2896,11 +3466,11 @@ class HermesModuleStateTest(unittest.TestCase):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 7, "error": "traefik unavailable"}))
+        agent_tasks_stub.run = mock.Mock(return_value={"exit_code": 7, "error": "traefik unavailable"})
 
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
-        setattr(agent_stub, "tasks", agent_tasks_stub)
+        agent_stub.resolve_agent_id = mock.Mock(return_value="module/traefik1")
+        agent_stub.tasks = agent_tasks_stub
         sys.modules["agent"] = agent_stub
         sys.modules["agent.tasks"] = agent_tasks_stub
 
@@ -2912,18 +3482,31 @@ class HermesModuleStateTest(unittest.TestCase):
                 )
                 stderr = io.StringIO()
 
-                with mock.patch.dict(
-                    os.environ,
-                    {
-                        "MODULE_ID": "hermes-agent1",
-                        "TCP_PORT": "20001",
-                        self.state.BASE_VIRTUALHOST_ENV: "agents.example.org",
-                        self.state.LETS_ENCRYPT_ENV: "false",
-                    },
-                    clear=False,
-                ), mock.patch("sys.stdin", io.StringIO(json.dumps({"agents": [{"id": 1, "name": "Route Agent", "role": "developer", "status": "start"}]}))), mock.patch(
-                    "sys.stderr", stderr
-                ), self.assertRaisesRegex(ValueError, "set-route for shared route hermes-agent1-hermes-auth host agents.example.org failed with exit code 7"):
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "MODULE_ID": "hermes-agent1",
+                            "TCP_PORT": "20001",
+                            self.state.BASE_VIRTUALHOST_ENV: "agents.example.org",
+                            self.state.LETS_ENCRYPT_ENV: "false",
+                        },
+                        clear=False,
+                    ),
+                    mock.patch(
+                        "sys.stdin",
+                        io.StringIO(
+                            json.dumps(
+                                {"agents": [{"id": 1, "name": "Route Agent", "role": "developer", "status": "start"}]}
+                            )
+                        ),
+                    ),
+                    mock.patch("sys.stderr", stderr),
+                    self.assertRaisesRegex(
+                        ValueError,
+                        "set-route for shared route hermes-agent1-hermes-auth host agents.example.org failed with exit code 7",
+                    ),
+                ):
                     runpy.run_path(str(RECONCILE_DESIRED_ROUTES_PATH), run_name="__main__")
 
                 self.assertIn(
@@ -2945,21 +3528,25 @@ class HermesModuleStateTest(unittest.TestCase):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
+        agent_tasks_stub.run = mock.Mock(return_value={"exit_code": 0})
 
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_env", mock.Mock(side_effect=set_env_side_effect))
-        setattr(agent_stub, "unset_env", mock.Mock(side_effect=unset_env_side_effect))
-        setattr(agent_stub, "assert_exp", mock.Mock())
-        setattr(agent_stub, "tasks", agent_tasks_stub)
+        agent_stub.set_env = mock.Mock(side_effect=set_env_side_effect)
+        agent_stub.unset_env = mock.Mock(side_effect=unset_env_side_effect)
+        agent_stub.assert_exp = mock.Mock()
+        agent_stub.tasks = agent_tasks_stub
         sys.modules["agent"] = agent_stub
         sys.modules["agent.tasks"] = agent_tasks_stub
 
         try:
-            with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir), mock.patch.dict(
-                os.environ,
-                {"AGENT_ID": "module/hermes-agent15", "TIMEZONE": "UTC"},
-                clear=False,
+            with (
+                tempfile.TemporaryDirectory() as temp_dir,
+                working_directory(temp_dir),
+                mock.patch.dict(
+                    os.environ,
+                    {"AGENT_ID": "module/hermes-agent15", "TIMEZONE": "UTC"},
+                    clear=False,
+                ),
             ):
                 self.state.write_jsonfile(
                     Path("agents") / "1" / "metadata.json",
@@ -2985,12 +3572,15 @@ class HermesModuleStateTest(unittest.TestCase):
 
                 run_action(RESTORE_MODULE_ACTION_DIR, request)
 
-                self.assertEqual(read_envfile("environment"), {
-                    "TIMEZONE": "Europe/Rome",
-                    "BASE_VIRTUALHOST": "agents.example.org",
-                    "USER_DOMAIN": "example.org",
-                    "LETS_ENCRYPT": "true",
-                })
+                self.assertEqual(
+                    read_envfile("environment"),
+                    {
+                        "TIMEZONE": "Europe/Rome",
+                        "BASE_VIRTUALHOST": "agents.example.org",
+                        "USER_DOMAIN": "example.org",
+                        "LETS_ENCRYPT": "true",
+                    },
+                )
                 agent_tasks_stub.run.assert_called_once_with(
                     agent_id="module/hermes-agent15",
                     action="configure-module",
@@ -3038,12 +3628,12 @@ class HermesModuleStateTest(unittest.TestCase):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
+        agent_tasks_stub.run = mock.Mock(return_value={"exit_code": 0})
 
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
-        setattr(agent_stub, "assert_exp", mock.Mock())
-        setattr(agent_stub, "tasks", agent_tasks_stub)
+        agent_stub.resolve_agent_id = mock.Mock(return_value="module/traefik1")
+        agent_stub.assert_exp = mock.Mock()
+        agent_stub.tasks = agent_tasks_stub
         sys.modules["agent"] = agent_stub
         sys.modules["agent.tasks"] = agent_tasks_stub
 
@@ -3059,10 +3649,17 @@ class HermesModuleStateTest(unittest.TestCase):
                         return emulate_remove_agent_state(command)
                     return types.SimpleNamespace(returncode=0)
 
-                with mock.patch.dict(os.environ, {"MODULE_ID": "hermes-agent1", "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"}, clear=False), mock.patch(
-                    "subprocess.run",
-                    side_effect=run_side_effect,
-                ) as run_command:
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"MODULE_ID": "hermes-agent1", "HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"},
+                        clear=False,
+                    ),
+                    mock.patch(
+                        "subprocess.run",
+                        side_effect=run_side_effect,
+                    ) as run_command,
+                ):
                     run_action(DESTROY_MODULE_ACTION_DIR)
 
                 agent_stub.resolve_agent_id.assert_called_once_with("traefik@node")
@@ -3101,7 +3698,27 @@ class HermesModuleStateTest(unittest.TestCase):
                         mock.call(["podman", "rm", "--force", "hermes-socket-4"], check=False),
                         mock.call(["runagent", "remove-agent-state", "--agent-id", "4"], check=True),
                         mock.call(["podman", "volume", "exists", "hermes-agents-home"], check=False),
-                        mock.call(["podman", "run", "--rm", "--replace", "--name", "hermes-agent-cleanup-4", "--network=none", "--user", "root", "--entrypoint", "/bin/sh", "--volume", "hermes-agents-home:/opt/agents:z", "quay.io/example/hermes:test", "-c", "rm -rf /opt/agents/4"], check=True),
+                        mock.call(
+                            [
+                                "podman",
+                                "run",
+                                "--rm",
+                                "--replace",
+                                "--name",
+                                "hermes-agent-cleanup-4",
+                                "--network=none",
+                                "--user",
+                                "root",
+                                "--entrypoint",
+                                "/bin/sh",
+                                "--volume",
+                                "hermes-agents-home:/opt/agents:z",
+                                "quay.io/example/hermes:test",
+                                "-c",
+                                "rm -rf /opt/agents/4",
+                            ],
+                            check=True,
+                        ),
                     ],
                 )
                 self.assertFalse((self.state.SECRETS_DIR / "4.env").exists())
@@ -3120,12 +3737,12 @@ class HermesModuleStateTest(unittest.TestCase):
         original_agent = sys.modules.get("agent")
         original_agent_tasks = sys.modules.get("agent.tasks")
         agent_tasks_stub = types.ModuleType("agent.tasks")
-        setattr(agent_tasks_stub, "run", mock.Mock(return_value={"exit_code": 0}))
+        agent_tasks_stub.run = mock.Mock(return_value={"exit_code": 0})
 
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "resolve_agent_id", mock.Mock(return_value="module/traefik1"))
-        setattr(agent_stub, "assert_exp", mock.Mock())
-        setattr(agent_stub, "tasks", agent_tasks_stub)
+        agent_stub.resolve_agent_id = mock.Mock(return_value="module/traefik1")
+        agent_stub.assert_exp = mock.Mock()
+        agent_stub.tasks = agent_tasks_stub
         sys.modules["agent"] = agent_stub
         sys.modules["agent.tasks"] = agent_tasks_stub
 
@@ -3136,14 +3753,17 @@ class HermesModuleStateTest(unittest.TestCase):
                     {"id": 1, "name": "One Agent", "role": "default", "status": "start"},
                 )
 
-                with mock.patch.dict(
-                    os.environ,
-                    {
-                        "MODULE_ID": "hermes-agent1",
-                        self.state.LETS_ENCRYPT_ENV: "true",
-                    },
-                    clear=False,
-                ), mock.patch("sys.stdin", io.StringIO("{}")):
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "MODULE_ID": "hermes-agent1",
+                            self.state.LETS_ENCRYPT_ENV: "true",
+                        },
+                        clear=False,
+                    ),
+                    mock.patch("sys.stdin", io.StringIO("{}")),
+                ):
                     runpy.run_path(str(DESTROY_REMOVE_ROUTES_PATH), run_name="__main__")
 
                 self.assertEqual(
@@ -3184,15 +3804,18 @@ class HermesModuleStateTest(unittest.TestCase):
             )
             stdout = io.StringIO()
 
-            with mock.patch.dict(
-                os.environ,
-                {
-                    self.state.BASE_VIRTUALHOST_ENV: "agents.example.org",
-                    self.state.USER_DOMAIN_ENV: "example.org",
-                    self.state.LETS_ENCRYPT_ENV: "true",
-                },
-                clear=False,
-            ), mock.patch("sys.stdout", stdout):
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        self.state.BASE_VIRTUALHOST_ENV: "agents.example.org",
+                        self.state.USER_DOMAIN_ENV: "example.org",
+                        self.state.LETS_ENCRYPT_ENV: "true",
+                    },
+                    clear=False,
+                ),
+                mock.patch("sys.stdout", stdout),
+            ):
                 runpy.run_path(str(GET_CONFIGURATION_PATH), run_name="__main__")
 
             self.assertEqual(
@@ -3209,9 +3832,119 @@ class HermesModuleStateTest(unittest.TestCase):
                             "status": "stop",
                             "allowed_user": "alice",
                         }
-                    ]
+                    ],
+                    "roles": list(self.state.ALLOWED_ROLES),
+                    "max_agents": self.state.MAX_AGENTS,
+                    "invalid_agents": [],
                 },
             )
+
+    def write_corrupt_agent_state(self):
+        """agents/1 valid, agents/2 corrupt JSON, agents/3 id/directory mismatch."""
+        self.state.write_jsonfile(
+            Path("agents") / "1" / "metadata.json",
+            {"id": 1, "name": "Healthy Agent", "role": "default", "status": "start", "allowed_user": "alice"},
+        )
+        self.state.ensure_private_directory(Path("agents") / "2")
+        (Path("agents") / "2" / "metadata.json").write_text("{not json", encoding="utf-8")
+        self.state.write_jsonfile(
+            Path("agents") / "3" / "metadata.json",
+            {"id": 9, "name": "Moved Agent", "role": "default", "status": "start", "allowed_user": "bob"},
+        )
+
+    def test_read_agent_state_report_isolates_broken_records(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            self.write_corrupt_agent_state()
+
+            report = self.state.read_agent_state_report()
+            self.assertEqual([agent_data["id"] for agent_data in report["agents"]], [1])
+            self.assertEqual([entry["directory"] for entry in report["invalid"]], ["2", "3"])
+            self.assertIn("does not match directory", report["invalid"][1]["error"])
+
+            self.assertEqual([a["id"] for a in self.state.read_agents_from_state(strict=False)], [1])
+            with self.assertRaisesRegex(ValueError, r"agents/2.*agents/3"):
+                self.state.read_agents_from_state()
+
+    def test_get_configuration_reports_invalid_agents_instead_of_failing(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            self.write_corrupt_agent_state()
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {}, clear=False),
+                mock.patch("sys.stdout", stdout),
+                mock.patch("sys.stderr", io.StringIO()),
+            ):
+                runpy.run_path(str(GET_CONFIGURATION_PATH), run_name="__main__")
+            output = json.loads(stdout.getvalue())
+            self.assertEqual([a["id"] for a in output["agents"]], [1])
+            self.assertEqual([entry["directory"] for entry in output["invalid_agents"]], ["2", "3"])
+
+    def test_configure_module_validation_refuses_to_run_over_corrupt_agent_state(self):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            working_directory(temp_dir),
+            stubbed_agent_module(set_status=mock.Mock()) as agent_stub,
+        ):
+            self.write_corrupt_agent_state()
+            stdout = io.StringIO()
+            request = json.dumps({"agents": [{"id": 1, "name": "Healthy Agent", "role": "default", "status": "start"}]})
+            with (
+                mock.patch("sys.stdin", io.StringIO(request)),
+                mock.patch("sys.stdout", stdout),
+                mock.patch("sys.stderr", io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    runpy.run_path(str(CONFIGURE_MODULE_ACTION_DIR / "10validate-input"), run_name="__main__")
+            self.assertEqual(raised.exception.code, 2)
+            agent_stub.set_status.assert_called_once_with("validation-failed")
+            self.assertEqual(json.loads(stdout.getvalue())[0]["error"], "agent_state_invalid")
+            self.assertEqual(json.loads(stdout.getvalue())[0]["value"], ["2", "3"])
+
+    def test_sync_agent_runtime_tolerates_corrupt_sibling_agent(self):
+        with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
+            self.write_corrupt_agent_state()
+            write_envfile(self.state.ENVIRONMENT_FILE, {"TIMEZONE": "UTC"})
+            with (
+                mock.patch.object(self.sync.agent, "read_envfile", side_effect=read_envfile, create=True),
+                mock.patch.object(self.sync.agent, "write_envfile", side_effect=write_envfile, create=True),
+                mock.patch("sys.stderr", io.StringIO()) as stderr,
+            ):
+                self.sync.sync_agent_runtime_files(agent_id=1)
+                self.sync.sync_agent_runtime_files()
+            self.assertTrue((Path("agents") / "1" / "agent.env").is_file())
+            self.assertFalse((Path("agents") / "3" / "agent.env").exists())
+            registry = json.loads(self.state.AUTHPROXY_AGENTS_FILE.read_text(encoding="utf-8"))
+            self.assertEqual([record["id"] for record in registry["agents"]], [1])
+            self.assertIn("ignoring agents/2", stderr.getvalue())
+
+    def test_validation_constants_match_schemas_and_ui_fallbacks(self):
+        """Roles, the name pattern and the agent limit are defined once in
+        hermes_agent_state; every copy (both JSON schemas and the UI fallback
+        list) must stay identical or the UI can silently drop agents."""
+        import re
+
+        input_schema = json.loads((CONFIGURE_MODULE_ACTION_DIR / "validate-input.json").read_text(encoding="utf-8"))
+        output_schema = json.loads((GET_CONFIGURATION_PATH.parent / "validate-output.json").read_text(encoding="utf-8"))
+        roles = list(self.state.ALLOWED_ROLES)
+
+        for schema_name, schema in (("validate-input.json", input_schema), ("validate-output.json", output_schema)):
+            agent_schema = schema["properties"]["agents"]["items"]["properties"]
+            self.assertEqual(agent_schema["role"]["enum"], roles, schema_name)
+            self.assertEqual(list(agent_schema["status"]["enum"]), list(self.state.ALLOWED_STATUSES), schema_name)
+            self.assertEqual(agent_schema["name"]["pattern"], self.state.NAME_PATTERN.pattern, schema_name)
+            self.assertEqual(agent_schema["id"]["maximum"], self.state.MAX_AGENTS, schema_name)
+
+        self.assertEqual(output_schema["properties"]["roles"]["items"]["enum"], roles)
+        self.assertEqual(output_schema["properties"]["max_agents"]["const"], self.state.MAX_AGENTS)
+
+        ui_helpers = (ROOT / "ui" / "src" / "lib" / "agents.js").read_text(encoding="utf-8")
+        ui_roles_match = re.search(r"export const FALLBACK_ROLES = \[(.*?)\];", ui_helpers, re.DOTALL)
+        self.assertIsNotNone(ui_roles_match, "ui/src/lib/agents.js must keep a FALLBACK_ROLES list")
+        ui_roles = re.findall(r'"([a-z_]+)"', ui_roles_match.group(1))
+        self.assertEqual(ui_roles, roles)
+        self.assertIn(f"export const FALLBACK_MAX_AGENTS = {self.state.MAX_AGENTS};", ui_helpers)
+        self.assertIn(f"export const AGENT_NAME_PATTERN = /{self.state.NAME_PATTERN.pattern}/;", ui_helpers)
+        self.assertIn(self.state.BASE_VIRTUALHOST_PATTERN.pattern, ui_helpers)
 
     def test_get_agent_runtime_reports_actual_runtime_status(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
@@ -3221,9 +3954,13 @@ class HermesModuleStateTest(unittest.TestCase):
             )
             stdout = io.StringIO()
 
-            with mock.patch("sys.stdin", io.StringIO("{}")), mock.patch("sys.stdout", stdout), mock.patch(
-                "subprocess.run",
-                return_value=types.SimpleNamespace(returncode=0),
+            with (
+                mock.patch("sys.stdin", io.StringIO("{}")),
+                mock.patch("sys.stdout", stdout),
+                mock.patch(
+                    "subprocess.run",
+                    return_value=types.SimpleNamespace(returncode=0),
+                ),
             ):
                 runpy.run_path(str(GET_AGENT_RUNTIME_PATH), run_name="__main__")
 
@@ -3267,7 +4004,10 @@ class HermesModuleStateTest(unittest.TestCase):
         original_argv = sys.argv[:]
         try:
             sys.argv[:] = [str(REMOVE_AGENT_STATE_PATH), "--agent-id", "31"]
-            with self.assertRaises(SystemExit) as exit_error, mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            with (
+                self.assertRaises(SystemExit) as exit_error,
+                mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
                 runpy.run_path(str(REMOVE_AGENT_STATE_PATH), run_name="__main__")
 
             self.assertEqual(exit_error.exception.code, 2)
@@ -3293,10 +4033,16 @@ class HermesModuleStateTest(unittest.TestCase):
                     return types.SimpleNamespace(returncode=0)
 
                 sys.argv[:] = [str(REMOVE_AGENT_STATE_PATH), "--agent-id", "4"]
-                with self.assertRaises(subprocess.CalledProcessError), mock.patch(
-                    "subprocess.run",
-                    side_effect=run_side_effect,
-                ), mock.patch.dict(os.environ, {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"}, clear=False):
+                with (
+                    self.assertRaises(subprocess.CalledProcessError),
+                    mock.patch(
+                        "subprocess.run",
+                        side_effect=run_side_effect,
+                    ),
+                    mock.patch.dict(
+                        os.environ, {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"}, clear=False
+                    ),
+                ):
                     runpy.run_path(str(REMOVE_AGENT_STATE_PATH), run_name="__main__")
 
                 self.assertTrue((Path("agents") / "4" / "agent.env").exists())
@@ -3322,7 +4068,12 @@ class HermesModuleStateTest(unittest.TestCase):
                     return types.SimpleNamespace(returncode=0)
 
                 sys.argv[:] = [str(REMOVE_AGENT_STATE_PATH), "--agent-id", "4"]
-                with mock.patch("subprocess.run", side_effect=run_side_effect), mock.patch.dict(os.environ, {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"}, clear=False):
+                with (
+                    mock.patch("subprocess.run", side_effect=run_side_effect),
+                    mock.patch.dict(
+                        os.environ, {"HERMES_AGENT_HERMES_IMAGE": "quay.io/example/hermes:test"}, clear=False
+                    ),
+                ):
                     with self.assertRaises(SystemExit) as exit_error:
                         runpy.run_path(str(REMOVE_AGENT_STATE_PATH), run_name="__main__")
 
@@ -3337,28 +4088,32 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_configure_module_validation_rejects_non_ascii_names(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_status", mock.Mock())
+        agent_stub.set_status = mock.Mock()
         sys.modules["agent"] = agent_stub
 
         try:
             stdout = io.StringIO()
-            with mock.patch(
-                "sys.stdin",
-                io.StringIO(
-                    json.dumps(
-                        {
-                            "agents": [
-                                {
-                                    "id": 1,
-                                    "name": "Jörg",
-                                    "role": "developer",
-                                    "status": "start",
-                                }
-                            ]
-                        }
-                    )
+            with (
+                mock.patch(
+                    "sys.stdin",
+                    io.StringIO(
+                        json.dumps(
+                            {
+                                "agents": [
+                                    {
+                                        "id": 1,
+                                        "name": "Jörg",
+                                        "role": "developer",
+                                        "status": "start",
+                                    }
+                                ]
+                            }
+                        )
+                    ),
                 ),
-            ), mock.patch("sys.stdout", stdout), self.assertRaises(SystemExit) as exit_error:
+                mock.patch("sys.stdout", stdout),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
                 runpy.run_path(
                     str(CONFIGURE_MODULE_ACTION_DIR / "10validate-input"),
                     run_name="__main__",
@@ -3386,16 +4141,21 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_configure_module_validation_rejects_non_boolean_lets_encrypt(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_status", mock.Mock())
+        agent_stub.set_status = mock.Mock()
         sys.modules["agent"] = agent_stub
 
         try:
             stdout = io.StringIO()
             stderr = io.StringIO()
-            with mock.patch(
-                "sys.stdin",
-                io.StringIO(json.dumps({"lets_encrypt": "yes", "agents": []})),
-            ), mock.patch("sys.stdout", stdout), mock.patch("sys.stderr", stderr), self.assertRaises(SystemExit) as exit_error:
+            with (
+                mock.patch(
+                    "sys.stdin",
+                    io.StringIO(json.dumps({"lets_encrypt": "yes", "agents": []})),
+                ),
+                mock.patch("sys.stdout", stdout),
+                mock.patch("sys.stderr", stderr),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
                 runpy.run_path(
                     str(CONFIGURE_MODULE_ACTION_DIR / "10validate-input"),
                     run_name="__main__",
@@ -3427,29 +4187,33 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_configure_module_validation_requires_user_domain_and_allowed_user_for_published_dashboard(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_status", mock.Mock())
+        agent_stub.set_status = mock.Mock()
         sys.modules["agent"] = agent_stub
 
         try:
             stdout = io.StringIO()
-            with mock.patch(
-                "sys.stdin",
-                io.StringIO(
-                    json.dumps(
-                        {
-                            "base_virtualhost": "agents.example.org",
-                            "agents": [
-                                {
-                                    "id": 1,
-                                    "name": "Alice Agent",
-                                    "role": "developer",
-                                    "status": "start",
-                                }
-                            ],
-                        }
-                    )
+            with (
+                mock.patch(
+                    "sys.stdin",
+                    io.StringIO(
+                        json.dumps(
+                            {
+                                "base_virtualhost": "agents.example.org",
+                                "agents": [
+                                    {
+                                        "id": 1,
+                                        "name": "Alice Agent",
+                                        "role": "developer",
+                                        "status": "start",
+                                    }
+                                ],
+                            }
+                        )
+                    ),
                 ),
-            ), mock.patch("sys.stdout", stdout), self.assertRaises(SystemExit) as exit_error:
+                mock.patch("sys.stdout", stdout),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
                 runpy.run_path(
                     str(CONFIGURE_MODULE_ACTION_DIR / "10validate-input"),
                     run_name="__main__",
@@ -3477,44 +4241,49 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_configure_module_validation_rejects_unknown_user_domain_user(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "set_status", mock.Mock())
+        agent_stub.set_status = mock.Mock()
         sys.modules["agent"] = agent_stub
 
         try:
             stdout = io.StringIO()
-            with mocked_ldap_modules(
-                domains={
-                    "example.org": {
-                        "domain_name": "example.org",
-                        "host": "127.0.0.1",
-                        "port": 389,
-                        "base_dn": "dc=example,dc=org",
-                        "schema": "rfc2307",
-                        "bind_dn": "cn=ldapservice,dc=example,dc=org",
-                        "bind_password": "ldap-secret",
-                    }
-                },
-                users_by_domain={"example.org": [{"user": "alice", "display_name": "Alice User", "locked": False}]},
-            ), mock.patch(
-                "sys.stdin",
-                io.StringIO(
-                    json.dumps(
-                        {
-                            "base_virtualhost": "agents.example.org",
-                            "user_domain": "example.org",
-                            "agents": [
-                                {
-                                    "id": 1,
-                                    "name": "Alice Agent",
-                                    "role": "developer",
-                                    "status": "start",
-                                    "allowed_user": "bob",
-                                }
-                            ],
+            with (
+                mocked_ldap_modules(
+                    domains={
+                        "example.org": {
+                            "domain_name": "example.org",
+                            "host": "127.0.0.1",
+                            "port": 389,
+                            "base_dn": "dc=example,dc=org",
+                            "schema": "rfc2307",
+                            "bind_dn": "cn=ldapservice,dc=example,dc=org",
+                            "bind_password": "ldap-secret",
                         }
-                    )
+                    },
+                    users_by_domain={"example.org": [{"user": "alice", "display_name": "Alice User", "locked": False}]},
                 ),
-            ), mock.patch("sys.stdout", stdout), self.assertRaises(SystemExit) as exit_error:
+                mock.patch(
+                    "sys.stdin",
+                    io.StringIO(
+                        json.dumps(
+                            {
+                                "base_virtualhost": "agents.example.org",
+                                "user_domain": "example.org",
+                                "agents": [
+                                    {
+                                        "id": 1,
+                                        "name": "Alice Agent",
+                                        "role": "developer",
+                                        "status": "start",
+                                        "allowed_user": "bob",
+                                    }
+                                ],
+                            }
+                        )
+                    ),
+                ),
+                mock.patch("sys.stdout", stdout),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
                 runpy.run_path(
                     str(CONFIGURE_MODULE_ACTION_DIR / "10validate-input"),
                     run_name="__main__",
@@ -3542,7 +4311,7 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_configure_user_domain_step_binds_selected_domain(self):
         original_agent = sys.modules.get("agent")
         agent_stub = types.ModuleType("agent")
-        setattr(agent_stub, "bind_user_domains", mock.Mock(return_value=True))
+        agent_stub.bind_user_domains = mock.Mock(return_value=True)
         sys.modules["agent"] = agent_stub
 
         try:
@@ -3561,26 +4330,30 @@ class HermesModuleStateTest(unittest.TestCase):
 
     def test_list_user_domains_action_returns_sorted_domain_metadata(self):
         stdout = io.StringIO()
-        with mocked_ldap_modules(
-            domains={
-                "b.example.org": {
-                    "domain_name": "b.example.org",
-                    "host": "127.0.0.1",
-                    "port": 389,
-                    "base_dn": "dc=b,dc=example,dc=org",
-                    "schema": "ad",
-                    "location": "internal",
-                },
-                "a.example.org": {
-                    "domain_name": "a.example.org",
-                    "host": "127.0.0.1",
-                    "port": 389,
-                    "base_dn": "dc=a,dc=example,dc=org",
-                    "schema": "rfc2307",
-                    "location": "external",
-                },
-            }
-        ), mock.patch("sys.stdin", io.StringIO("{}")), mock.patch("sys.stdout", stdout):
+        with (
+            mocked_ldap_modules(
+                domains={
+                    "b.example.org": {
+                        "domain_name": "b.example.org",
+                        "host": "127.0.0.1",
+                        "port": 389,
+                        "base_dn": "dc=b,dc=example,dc=org",
+                        "schema": "ad",
+                        "location": "internal",
+                    },
+                    "a.example.org": {
+                        "domain_name": "a.example.org",
+                        "host": "127.0.0.1",
+                        "port": 389,
+                        "base_dn": "dc=a,dc=example,dc=org",
+                        "schema": "rfc2307",
+                        "location": "external",
+                    },
+                }
+            ),
+            mock.patch("sys.stdin", io.StringIO("{}")),
+            mock.patch("sys.stdout", stdout),
+        ):
             runpy.run_path(str(LIST_USER_DOMAINS_PATH), run_name="__main__")
 
         self.assertEqual(
@@ -3595,27 +4368,31 @@ class HermesModuleStateTest(unittest.TestCase):
 
     def test_list_domain_users_action_returns_sorted_users(self):
         stdout = io.StringIO()
-        with mocked_ldap_modules(
-            domains={
-                "example.org": {
-                    "domain_name": "example.org",
-                    "host": "127.0.0.1",
-                    "port": 389,
-                    "base_dn": "dc=example,dc=org",
-                    "schema": "rfc2307",
-                    "bind_dn": "cn=ldapservice,dc=example,dc=org",
-                    "bind_password": "ldap-secret",
-                }
-            },
-            users_by_domain={
-                "example.org": [
-                    {"user": "zoe", "display_name": "Zoe Agent", "locked": False},
-                    {"user": "alice", "display_name": "Alice Agent", "locked": True},
-                ]
-            },
-        ), mock.patch("sys.stdin", io.StringIO(json.dumps({"domain": "example.org"}))), mock.patch(
-            "sys.stdout",
-            stdout,
+        with (
+            mocked_ldap_modules(
+                domains={
+                    "example.org": {
+                        "domain_name": "example.org",
+                        "host": "127.0.0.1",
+                        "port": 389,
+                        "base_dn": "dc=example,dc=org",
+                        "schema": "rfc2307",
+                        "bind_dn": "cn=ldapservice,dc=example,dc=org",
+                        "bind_password": "ldap-secret",
+                    }
+                },
+                users_by_domain={
+                    "example.org": [
+                        {"user": "zoe", "display_name": "Zoe Agent", "locked": False},
+                        {"user": "alice", "display_name": "Alice Agent", "locked": True},
+                    ]
+                },
+            ),
+            mock.patch("sys.stdin", io.StringIO(json.dumps({"domain": "example.org"}))),
+            mock.patch(
+                "sys.stdout",
+                stdout,
+            ),
         ):
             runpy.run_path(str(LIST_DOMAIN_USERS_PATH), run_name="__main__")
 
@@ -3631,10 +4408,14 @@ class HermesModuleStateTest(unittest.TestCase):
 
     def test_sync_agent_runtime_files_requires_existing_agent(self):
         with tempfile.TemporaryDirectory() as temp_dir, working_directory(temp_dir):
-            with mock.patch.object(self.sync.agent, "read_envfile", side_effect=read_envfile, create=True), mock.patch.object(
-                self.sync.agent,
-                "write_envfile",
-                side_effect=write_envfile,
-                create=True,
-            ), self.assertRaisesRegex(ValueError, "agent 99 not found"):
+            with (
+                mock.patch.object(self.sync.agent, "read_envfile", side_effect=read_envfile, create=True),
+                mock.patch.object(
+                    self.sync.agent,
+                    "write_envfile",
+                    side_effect=write_envfile,
+                    create=True,
+                ),
+                self.assertRaisesRegex(ValueError, "agent 99 not found"),
+            ):
                 self.sync.sync_agent_runtime_files(agent_id=99)

@@ -1,5 +1,1 @@
-{
-    "terminal.integrated.env.linux": {
-        "NODE_OPTIONS": "--openssl-legacy-provider"
-    }
-}
+{}

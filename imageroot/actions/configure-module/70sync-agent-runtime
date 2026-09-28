@@ -11,14 +11,14 @@ from action_logging import log_action_failure
 
 
 def main():
-	json.load(sys.stdin)
+    json.load(sys.stdin)
 
-	subprocess.run(["runagent", "sync-agent-runtime"], check=True)
+    subprocess.run(["runagent", "sync-agent-runtime"], check=True)
 
 
 if __name__ == "__main__":
-	try:
-		main()
-	except Exception as error:
-		log_action_failure("configure-module/70sync-agent-runtime", error)
-		raise
+    try:
+        main()
+    except Exception as error:
+        log_action_failure("configure-module/70sync-agent-runtime", error)
+        raise

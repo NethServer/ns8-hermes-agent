@@ -55,12 +55,11 @@ fi
 echo "Build static UI files with node..."
 buildah run \
     --workingdir=/usr/src/ui \
-    --env="NODE_OPTIONS=--openssl-legacy-provider" \
     nodebuilder-hermes-agent \
     sh -c "corepack enable && yarn install && yarn build"
 
 build_component_image "hermes-agent-auth" "containers/auth"
-build_component_image "hermes-agent-hermes" "." "containers/hermes/Containerfile"
+build_component_image "hermes-agent-hermes" "containers/hermes"
 build_component_image "hermes-agent-socket" "containers/socket"
 
 # Add imageroot directory to the container image

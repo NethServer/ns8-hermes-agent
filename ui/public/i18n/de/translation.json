@@ -17,7 +17,7 @@
     "title": "Einstellungen",
     "agents_title": "Agents",
     "agents_description": "Manage configured agents, their role assignments, and their Hermes dashboard access.",
-    "agent_limit_reached": "You can configure up to 30 agents in this module.",
+    "agent_limit_reached": "In diesem Modul können bis zu {count} Agenten konfiguriert werden.",
     "create_agent": "Create agent",
     "create_agent_title": "Create agent",
     "edit_agent": "Edit agent",
@@ -67,7 +67,12 @@
     "actions": "Actions",
     "no_agents": "No agents configured",
     "start_agent": "Start",
-    "stop_agent": "Stop"
+    "stop_agent": "Stop",
+    "role_unknown": "Unbekannte Rolle ({role})",
+    "unknown_role_title": "Unbekannte Agentenrolle",
+    "unknown_role_blocks_save": "Mindestens ein Agent verwendet eine Rolle, die diese Version der Oberfläche nicht kennt. Aktualisieren Sie das Modul vor dem Speichern, sonst könnten diese Agenten nicht erhalten bleiben.",
+    "invalid_agent_state_title": "Beschädigter Agentenzustand",
+    "invalid_agent_state_description": "Die Metadaten der Agentenverzeichnisse {directories} können nicht gelesen werden. Reparieren oder entfernen Sie sie auf dem Knoten vor dem Speichern; bis dahin lehnt das Modul Konfigurationsänderungen ab."
   },
   "common": {
     "required": "Erforderlich",

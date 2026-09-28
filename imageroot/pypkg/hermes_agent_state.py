@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -5,13 +6,17 @@ import stat
 import tempfile
 from pathlib import Path
 
-
 ENVIRONMENT_FILE = Path("environment")
 SECRETS_DIR = Path("secrets")
 SHARED_SECRETS_ENVFILE = SECRETS_DIR / "shared.env"
 AUTHPROXY_ENVFILE = Path("authproxy.env")
 AUTHPROXY_SECRETS_ENVFILE = Path("authproxy_secrets.env")
-AUTHPROXY_AGENTS_FILE = Path("authproxy_agents.json")
+# Mounted as a directory into hermes-auth so atomic replacements of the
+# registry are visible to the running proxy (a single-file bind mount pins
+# the old inode).
+AUTHPROXY_DIR = Path("authproxy")
+AUTHPROXY_AGENTS_FILE = AUTHPROXY_DIR / "agents.json"
+LEGACY_AUTHPROXY_AGENTS_FILE = Path("authproxy_agents.json")
 AGENTS_DIR = Path("agents")
 AGENTS_HOME_VOLUME = "hermes-agents-home"
 AGENTS_HOME_MOUNT_DIR = "/opt/agents"
@@ -19,6 +24,11 @@ HERMES_RUNTIME_HOME = "/opt/data"
 AGENT_DASHBOARD_SOCKETS_DIR = Path("dashboard-sockets")
 AUTHPROXY_SOCKET_MOUNT_DIR = "/sockets"
 AGENT_PUBLIC_ENVFILE = "agent.env"
+# Derived, never backed up: records what each running unit was last started
+# with so configure-module can leave unchanged agents alone.
+RUNTIME_FINGERPRINTS_FILE = Path("runtime-fingerprints.json")
+AGENT_RUNTIME_ENV_KEYS = ("HERMES_AGENT_HERMES_IMAGE", "HERMES_AGENT_SOCKET_IMAGE", "TIMEZONE")
+AUTH_RUNTIME_ENV_KEYS = ("HERMES_AGENT_AUTH_IMAGE", "TCP_PORT", "TIMEZONE")
 SOUL_TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates" / "SOUL"
 MAX_AGENTS = 30
 
@@ -169,15 +179,20 @@ def agent_dashboard_socket_path(agent_id, socket_dir=AUTHPROXY_SOCKET_MOUNT_DIR)
     return str(Path(socket_dir) / agent_dashboard_socket_name(agent_id))
 
 
-def read_agents_from_state():
+def read_agent_state_report():
+    """Read every agents/<id>/metadata.json and separate valid from broken ones.
+
+    Returns ``{"agents": [...], "invalid": [{"directory": "7", "error": "..."}]}``.
+    One corrupt or tampered file must not take every other agent down with it,
+    so callers that only need the healthy set use this and log the rest.
+    """
+
     def validate_agent_metadata(agent_data, index):
         # Metadata is written per agent on disk, so validate every record here
         # before the action layer turns it into systemd, route, or env changes.
         extra_fields = sorted(set(agent_data) - {"id", "name", "role", "status", "allowed_user"})
         if extra_fields:
-            raise ValueError(
-                f"agent at index {index} has unexpected fields: {', '.join(extra_fields)}"
-            )
+            raise ValueError(f"agent at index {index} has unexpected fields: {', '.join(extra_fields)}")
 
         agent_id = agent_data.get("id")
         if not isinstance(agent_id, int) or agent_id < 1 or agent_id > MAX_AGENTS:
@@ -216,8 +231,9 @@ def read_agents_from_state():
         }
 
     agents = []
+    invalid = []
     if not AGENTS_DIR.exists():
-        return agents
+        return {"agents": agents, "invalid": invalid}
 
     for path in sorted(
         AGENTS_DIR.iterdir(),
@@ -226,13 +242,33 @@ def read_agents_from_state():
         if not path.is_dir() or not AGENT_DIR_PATTERN.fullmatch(path.name):
             continue
 
-        metadata = read_jsonfile(path / "metadata.json")
-        if metadata is None:
+        try:
+            metadata = read_jsonfile(path / "metadata.json")
+            if metadata is None:
+                continue
+            if not isinstance(metadata, dict):
+                raise ValueError(f"agent at index {len(agents)} metadata is not an object")
+            agent_data = validate_agent_metadata(metadata, len(agents))
+            if str(agent_data["id"]) != path.name:
+                raise ValueError(
+                    f"agent at index {len(agents)} id {agent_data['id']} does not match directory {path.name}"
+                )
+        except (ValueError, OSError) as error:
+            invalid.append({"directory": path.name, "error": str(error)})
             continue
 
-        agents.append(validate_agent_metadata(metadata, len(agents)))
+        agents.append(agent_data)
 
-    return sorted(agents, key=lambda agent_data: agent_data["id"])
+    return {"agents": sorted(agents, key=lambda agent_data: agent_data["id"]), "invalid": invalid}
+
+
+def read_agents_from_state(strict=True):
+    """Return the valid agents; with ``strict`` (default) raise if any record is broken."""
+    report = read_agent_state_report()
+    if strict and report["invalid"]:
+        details = "; ".join(f"agents/{entry['directory']}: {entry['error']}" for entry in report["invalid"])
+        raise ValueError(f"invalid agent metadata: {details}")
+    return report["agents"]
 
 
 def list_known_agent_ids():
@@ -257,3 +293,67 @@ def list_known_agent_ids():
                 record_agent_id(match.group(1))
 
     return sorted(ids)
+
+
+def _read_text_or_empty(path):
+    file_path = Path(path)
+    try:
+        return file_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def _fingerprint(parts):
+    return hashlib.sha256(json.dumps(parts, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def agent_runtime_fingerprint(agent_id, environment=None):
+    """Hash of everything hermes@<id> and hermes-socket@<id> consume at start."""
+    if environment is None:
+        environment = os.environ
+
+    agent_dir = AGENTS_DIR / str(agent_id)
+    return _fingerprint(
+        {
+            "metadata": _read_text_or_empty(agent_dir / "metadata.json"),
+            "public_env": _read_text_or_empty(agent_dir / AGENT_PUBLIC_ENVFILE),
+            "secrets": _read_text_or_empty(SECRETS_DIR / f"{agent_id}.env"),
+            "environment": {key: environment.get(key, "") for key in AGENT_RUNTIME_ENV_KEYS},
+        }
+    )
+
+
+def auth_runtime_fingerprint(environment=None):
+    """Hash of everything hermes-auth.service consumes at start."""
+    if environment is None:
+        environment = os.environ
+
+    return _fingerprint(
+        {
+            "env": _read_text_or_empty(AUTHPROXY_ENVFILE),
+            "secrets": _read_text_or_empty(AUTHPROXY_SECRETS_ENVFILE),
+            "agents": _read_text_or_empty(AUTHPROXY_AGENTS_FILE),
+            "environment": {key: environment.get(key, "") for key in AUTH_RUNTIME_ENV_KEYS},
+        }
+    )
+
+
+def read_runtime_fingerprints():
+    try:
+        data = read_jsonfile(RUNTIME_FINGERPRINTS_FILE)
+    except (OSError, ValueError):
+        data = None
+
+    if not isinstance(data, dict):
+        return {"agents": {}, "auth": ""}
+
+    agents = data.get("agents")
+    auth = data.get("auth")
+    return {
+        "agents": {str(key): str(value) for key, value in agents.items()} if isinstance(agents, dict) else {},
+        "auth": auth if isinstance(auth, str) else "",
+    }
+
+
+def write_runtime_fingerprints(fingerprints):
+    write_jsonfile(RUNTIME_FINGERPRINTS_FILE, fingerprints)

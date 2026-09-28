@@ -1,5 +1,8 @@
 [Unit]
 Description=Hermes shared auth proxy
+# ExecStartPre regenerates auth files through ldapproxy/Redis; tolerate a slow
+# boot instead of tripping systemd's default 5-failures-in-10s start limit.
+StartLimitIntervalSec=0
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
@@ -7,6 +10,7 @@ EnvironmentFile=-%S/state/environment
 EnvironmentFile=-%S/state/authproxy.env
 WorkingDirectory=%S/state
 Restart=on-failure
+RestartSec=10
 KillMode=none
 Type=notify
 NotifyAccess=all
@@ -24,8 +28,8 @@ ExecStart=runagent /usr/bin/podman run \
 		--env-file %S/state/authproxy.env \
 		--env-file %S/state/authproxy_secrets.env \
 		--env AUTH_PROXY_PORT=9119 \
-		--env AUTH_PROXY_AGENT_REGISTRY=/app/authproxy_agents.json \
-		--volume %S/state/authproxy_agents.json:/app/authproxy_agents.json:ro,z \
+		--env AUTH_PROXY_AGENT_REGISTRY=/app/authproxy/agents.json \
+		--volume %S/state/authproxy:/app/authproxy:ro,z \
 		--volume %S/state/dashboard-sockets:/sockets:z \
 		--tz=${TIMEZONE} \
 		${HERMES_AGENT_AUTH_IMAGE} \

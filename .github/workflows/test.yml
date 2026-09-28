@@ -1,0 +1,68 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python unit tests (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install auth proxy test dependencies and ruff
+        run: python -m pip install --disable-pip-version-check -r tests/requirements-auth.txt ruff
+
+      - name: Lint and format check (ruff)
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+  ui:
+    name: UI lint and build
+    runs-on: ubuntu-latest
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable Corepack (Yarn 4 from package.json)
+        run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: yarn
+          cache-dependency-path: ui/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Lint
+        run: yarn lint --no-fix --max-warnings 0
+
+      - name: Unit tests
+        run: yarn test:unit
+
+      - name: Build
+        run: yarn build

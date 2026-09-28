@@ -1,7 +1,6 @@
 import importlib
 import sys
 
-
 USER_DOMAIN_ENV = "USER_DOMAIN"
 LDAP_HOST_ENV = "LDAP_HOST"
 LDAP_PORT_ENV = "LDAP_PORT"

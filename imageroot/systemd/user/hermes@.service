@@ -2,6 +2,9 @@
 Description=Hermes gateway %i
 Requires=hermes-pod@%i.service
 After=hermes-pod@%i.service
+# ExecStartPre needs the local Redis replica (smarthost, ldapproxy). At boot it
+# may not be ready yet; never give up after a burst of early failures.
+StartLimitIntervalSec=0
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
@@ -9,6 +12,7 @@ EnvironmentFile=-%S/state/environment
 EnvironmentFile=-%S/state/agents/%i/agent.env
 WorkingDirectory=%S/state
 Restart=always
+RestartSec=10
 KillMode=none
 Type=notify
 NotifyAccess=all

@@ -1,6 +1,6 @@
 # Hermes Agent Resource Map
 
-*Last verified: 2026-08-03.* Hermes Agent is the open-source, self-improving agent by Nous Research, with official docs at `hermes-agent.nousresearch.com/docs`, the main codebase in `NousResearch/hermes-agent`, and the current latest release listed as `v0.19.1` (`v2026.7.30`). ([hermes-agent.nousresearch.com][1])
+*Last verified: 2026-09-11.* Hermes Agent is the open-source, self-improving agent by Nous Research, with official docs at `hermes-agent.nousresearch.com/docs`, the main codebase in `NousResearch/hermes-agent`, and the current latest release listed as `v0.21.1` (`v2026.9.7`). ([hermes-agent.nousresearch.com][1])
 
 ## 1) Canonical entry points
 
@@ -21,7 +21,7 @@
 
 ### Official release feed
 
-* [GitHub Releases](https://github.com/NousResearch/hermes-agent/releases) — primary source for “what changed recently” and version-by-version trend tracking. Latest visible release is `v0.19.1` (`v2026.7.30`). ([GitHub][4])
+* [GitHub Releases](https://github.com/NousResearch/hermes-agent/releases) — primary source for “what changed recently” and version-by-version trend tracking. Latest visible release is `v0.21.1` (`v2026.9.7`). ([GitHub][4])
 
 ### Official GitHub org
 

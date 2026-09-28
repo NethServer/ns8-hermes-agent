@@ -2,6 +2,64 @@
 Library    Collections
 Library    SSHLibrary
 
+*** Variables ***
+${TRAEFIK_ID}        traefik1
+${LDAP_IMAGE}        ghcr.io/nethserver/openldap:latest
+${USER_DOMAIN}       hermes.test
+${DASHBOARD_HOST}    agents.example.test
+${ALLOWED_USER}      alice
+${USER_PASSWORD}     Nethesis,1234
+${COOKIE_JAR}        /tmp/hermes-agent-test-cookies
+
+*** Keywords ***
+Run Module Action
+    [Arguments]    ${module}    ${action}    ${payload}
+    ${output}    ${rc} =    Execute Command    api-cli run module/${module}/${action} --data '${payload}'
+    ...    return_rc=True
+    Should Be Equal As Integers    ${rc}    0    ${action} on ${module} failed: ${output}
+    [Return]    ${output}
+
+Module Action Should Fail
+    [Arguments]    ${module}    ${action}    ${payload}
+    ${output}    ${rc} =    Execute Command    api-cli run module/${module}/${action} --data '${payload}'
+    ...    return_rc=True
+    Should Not Be Equal As Integers    ${rc}    0    ${action} on ${module} unexpectedly succeeded: ${output}
+    [Return]    ${output}
+
+Run As Module User
+    [Arguments]    ${command}
+    ${output}    ${rc} =    Execute Command    runagent -m ${module_id} sh -lc '${command}'
+    ...    return_rc=True
+    [Return]    ${output}    ${rc}
+
+Wait Until Agent Runtime Is Settled
+    [Arguments]    ${agent_id}
+    ${output}    ${rc} =    Run As Module User
+    ...    for attempt in $(seq 1 60); do systemctl --user is-active --quiet hermes@${agent_id}.service && systemctl --user is-active --quiet hermes-socket@${agent_id}.service && podman pod exists hermes-pod-${agent_id} && podman container exists hermes-${agent_id} && podman container exists hermes-socket-${agent_id} && podman exec hermes-${agent_id} test -f /opt/data/SOUL.md && podman exec hermes-${agent_id} test -f /opt/data/.env && test -S ${state_dir}/dashboard-sockets/agent-${agent_id}.sock && exit 0; sleep 2; done; systemctl --user status hermes@${agent_id}.service hermes-socket@${agent_id}.service --no-pager; exit 1
+    Should Be Equal As Integers    ${rc}    0    agent ${agent_id} runtime did not settle: ${output}
+
+Wait Until Auth Proxy Is Active
+    ${output}    ${rc} =    Run As Module User
+    ...    for attempt in $(seq 1 60); do systemctl --user is-active --quiet hermes-auth.service && curl -fs -o /dev/null http://127.0.0.1:${tcp_port}/health && exit 0; sleep 2; done; systemctl --user status hermes-auth.service --no-pager; exit 1
+    Should Be Equal As Integers    ${rc}    0    hermes-auth did not become healthy: ${output}
+
+Agent Home Subdir Should Exist
+    [Arguments]    ${agent_id}
+    ${output}    ${rc} =    Run As Module User
+    ...    podman unshare test -d "$(podman volume inspect --format {{.Mountpoint}} hermes-agents-home)/${agent_id}"
+    Should Be Equal As Integers    ${rc}    0    /opt/agents/${agent_id} missing in hermes-agents-home
+
+Agent Home Subdir Should Not Exist
+    [Arguments]    ${agent_id}
+    ${output}    ${rc} =    Run As Module User
+    ...    podman unshare test ! -e "$(podman volume inspect --format {{.Mountpoint}} hermes-agents-home)/${agent_id}"
+    Should Be Equal As Integers    ${rc}    0    /opt/agents/${agent_id} still present in hermes-agents-home
+
+File Should Not Contain LDAP Keys
+    [Arguments]    ${path}
+    ${count} =    Execute Command    grep -c '^LDAP_' ${path} || true
+    Should Be Equal    ${count}    0    ${path} must not expose LDAP settings to the agent
+
 *** Test Cases ***
 Check if hermes-agent is installed correctly
     ${output}  ${rc} =    Execute Command    add-module ${IMAGE_URL} 1
@@ -11,153 +69,178 @@ Check if hermes-agent is installed correctly
     Set Suite Variable    ${module_id}    ${output.module_id}
     ${module_home} =    Execute Command    getent passwd ${module_id} | cut -d: -f6
     Set Suite Variable    ${module_home}    ${module_home}
+    Set Suite Variable    ${state_dir}    ${module_home}/.config/state
+    ${tcp_port} =    Execute Command    grep '^TCP_PORT=' ${state_dir}/environment | cut -d= -f2-
+    Should Not Be Empty    ${tcp_port}    TCP_PORT must be reserved at install time
+    Set Suite Variable    ${tcp_port}    ${tcp_port}
 
 Check if install starts with no agent runtime
-    ${active_units} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user list-units "hermes@*.service" --state=active --no-legend | wc -l'
-    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -Ec "^hermes-" || true'
+    ${active_units}    ${rc} =    Run As Module User    systemctl --user list-units "hermes@*.service" --state=active --no-legend | wc -l
+    ${running_containers}    ${rc} =    Run As Module User    podman ps --format "{{.Names}}" | grep -Ec "^hermes-" || true
     Should Be Equal    ${active_units}    0
     Should Be Equal    ${running_containers}    0
+    ${secrets_mode} =    Execute Command    stat -c %a ${state_dir}/secrets
+    Should Be Equal    ${secrets_mode}    700
+    ${legacy_secrets} =    Execute Command    test -e ${state_dir}/secrets.env && echo present || echo absent
+    Should Be Equal    ${legacy_secrets}    absent
 
 Check if configure with zero agents keeps module idle
-    ${configure_payload} =    Set Variable    {"agents":[]}
-    ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '${configure_payload}'
-    ...    return_rc=True  return_stdout=False
-    Should Be Equal As Integers    ${rc}    0
-    ${output} =    Execute Command    api-cli run module/${module_id}/get-configuration --data '{}'
-    ${agent_count} =    Evaluate    len(json.loads(r'''${output}''')['agents'])    json
-    ${lets_encrypt} =    Evaluate    json.loads(r'''${output}''')['lets_encrypt']    json
-    ${active_units} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user list-units "hermes@*.service" --state=active --no-legend | wc -l'
-    Should Be Equal As Integers    ${agent_count}    0
-    Should Be Equal    ${lets_encrypt}    ${False}
+    Run Module Action    ${module_id}    configure-module    {"agents":[]}
+    ${output} =    Run Module Action    ${module_id}    get-configuration    {}
+    ${config} =    Evaluate    json.loads(r'''${output}''')    json
+    ${active_units}    ${rc} =    Run As Module User    systemctl --user list-units "hermes@*.service" --state=active --no-legend | wc -l
+    Length Should Be    ${config['agents']}    0
+    Should Be Equal    ${config['lets_encrypt']}    ${False}
+    Should Be Equal    ${config['base_virtualhost']}    ${EMPTY}
     Should Be Equal    ${active_units}    0
 
-Check if one started agent creates one runtime
-    ${configure_payload} =    Set Variable    {"base_virtualhost":"agents.example.test","lets_encrypt":true,"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"}]}
-    ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '${configure_payload}'
-    ...    return_rc=True  return_stdout=False
-    Should Be Equal As Integers    ${rc}    0
-    ${settled_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'for attempt in $(seq 1 20); do systemctl --user is-active --quiet hermes@1.service && podman pod exists hermes-pod-1 && podman container exists hermes-1 && podman exec hermes-1 test -f /opt/data/SOUL.md && podman exec hermes-1 test -f /opt/data/.env && exit 0; sleep 1; done; exit 1'
-    ...    return_rc=True  return_stdout=False
-    Should Be Equal As Integers    ${settled_rc}    0
-    ${output} =    Execute Command    api-cli run module/${module_id}/get-configuration --data '{}'
-    ${runtime_output} =    Execute Command    api-cli run module/${module_id}/get-agent-runtime --data '{}'
-    ${base_virtualhost} =    Evaluate    json.loads(r'''${output}''')['base_virtualhost']    json
-    ${lets_encrypt} =    Evaluate    json.loads(r'''${output}''')['lets_encrypt']    json
-    ${agent_status} =    Evaluate    json.loads(r'''${output}''')['agents'][0]['status']    json
-    ${agent_runtime_status} =    Evaluate    json.loads(r'''${runtime_output}''')['agents'][0]['runtime_status']    json
+Check if one started agent creates one runtime without publishing
+    Run Module Action    ${module_id}    configure-module    {"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"}]}
+    Wait Until Agent Runtime Is Settled    1
 
-    ${agent_env} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1.env' -print -quit
-    ${agent_secrets} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1_secrets.env' -print -quit
-    ${agent_metadata} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/agents/1/metadata.json' -print -quit
-    ${generated_env_count} =    Execute Command    find ${module_home} -maxdepth 8 -regextype posix-extended -regex '.*/agent_1(_secrets)?\.env' | wc -l
-    ${service_output}  ${service_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes@1.service'
-    ...    return_rc=True
-    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -Ec "^hermes-" || true'
-    ${container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-1'
-    ...    return_rc=True  return_stdout=False
-    ${pod_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-pod-1'
-    ...    return_rc=True  return_stdout=False
-    ${volume_name} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman volume inspect --format "{{.Name}}" hermes-agent-1-home'
-    ${agent_name_env} =    Execute Command    grep '^AGENT_NAME=' ${agent_env} | cut -d= -f2-
-    ${agent_role_env} =    Execute Command    grep '^AGENT_ROLE=' ${agent_env} | cut -d= -f2-
-    ${agent_dashboard_socket} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/dashboard-sockets/agent-1.sock' -print -quit
-    ${agent_secret} =    Execute Command    grep '^HERMES_AGENT_SECRET=' ${agent_secrets} | cut -d= -f2-
-    ${secret_key_count} =    Execute Command    grep -Ec '^(HERMES_AGENT_SECRET|SMTP_PASSWORD)=' ${agent_secrets}
-    ${route_output} =    Execute Command    api-cli run module/traefik1/get-route --data '{"instance":"${module_id}-hermes-agent-1"}'
-    ${route_host} =    Evaluate    json.loads(r'''${route_output}''')['host']    json
-    ${route_path} =    Evaluate    json.loads(r'''${route_output}''')['path']    json
-    ${route_lets_encrypt} =    Evaluate    json.loads(r'''${route_output}''')['lets_encrypt']    json
-    ${soul_content} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-1 cat /opt/data/SOUL.md'
-    ${home_env_content} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman exec hermes-1 cat /opt/data/.env'
+    ${output} =    Run Module Action    ${module_id}    get-configuration    {}
+    ${config} =    Evaluate    json.loads(r'''${output}''')    json
+    ${runtime_output} =    Run Module Action    ${module_id}    get-agent-runtime    {}
+    ${runtime} =    Evaluate    json.loads(r'''${runtime_output}''')    json
+    Should Be Equal    ${config['agents'][0]['status']}    start
+    Should Be Equal    ${config['agents'][0]['allowed_user']}    ${EMPTY}
+    Should Be Equal    ${runtime['agents'][0]['runtime_status']}    start
 
-    Should Not Be Empty    ${agent_env}
-    Should Not Be Empty    ${agent_secrets}
-    Should Not Be Empty    ${agent_metadata}
-    Should Be Equal    ${volume_name}    hermes-agent-1-home
-    Should Be Equal    ${generated_env_count}    2
-    Should Be Equal    ${base_virtualhost}    agents.example.test
-    Should Be Equal    ${lets_encrypt}    ${True}
-    Should Be Equal    ${agent_status}    start
-    Should Be Equal    ${agent_runtime_status}    start
-    Should Be Equal As Integers    ${service_rc}    0
-    Should Be Equal    ${running_containers}    1
-    Should Be Equal As Integers    ${container_rc}    0
-    Should Be Equal As Integers    ${pod_rc}    0
-    Should Be Equal    ${service_output}    active
+    # Generated state follows the documented layout.
+    Execute Command    test -f ${state_dir}/agents/1/metadata.json && test -f ${state_dir}/agents/1/agent.env && test -f ${state_dir}/secrets/1.env && test -f ${state_dir}/secrets/shared.env    return_stdout=False
+    ${legacy_files} =    Execute Command    find ${state_dir} -maxdepth 1 \\( -name 'agent_*.env' -o -name 'agent_*_secrets.env' -o -name 'secrets.env' \\) | wc -l
+    Should Be Equal    ${legacy_files}    0
+    ${agent_name_env} =    Execute Command    grep '^AGENT_NAME=' ${state_dir}/agents/1/agent.env | cut -d= -f2-
+    ${agent_role_env} =    Execute Command    grep '^AGENT_ROLE=' ${state_dir}/agents/1/agent.env | cut -d= -f2-
     Should Be Equal    ${agent_name_env}    Foo Bar
     Should Be Equal    ${agent_role_env}    developer
-    Should Not Be Empty    ${agent_dashboard_socket}
-    Should Not Be Empty    ${agent_secret}
-    Should Be Equal    ${secret_key_count}    1
-    Should Be Equal    ${route_host}    agents.example.test
-    Should Be Equal    ${route_lets_encrypt}    ${True}
+    ${secret_key_count} =    Execute Command    grep -Ec '^(HERMES_AGENT_SECRET|API_SERVER_KEY)=' ${state_dir}/secrets/1.env
+    Should Be Equal    ${secret_key_count}    2
+    File Should Not Contain LDAP Keys    ${state_dir}/agents/1/agent.env
+    File Should Not Contain LDAP Keys    ${state_dir}/secrets/1.env
+
+    # One shared volume with a per-agent subdir, no per-agent volumes.
+    ${output}    ${rc} =    Run As Module User    podman volume exists hermes-agents-home
+    Should Be Equal As Integers    ${rc}    0
+    ${output}    ${rc} =    Run As Module User    podman volume exists hermes-agent-1-home
+    Should Not Be Equal As Integers    ${rc}    0
+    Agent Home Subdir Should Exist    1
+
+    # Exactly the Hermes container and its socket relay are running.
+    ${running_containers}    ${rc} =    Run As Module User    podman ps --format "{{.Names}}" | grep -Ec "^hermes-(1|socket-1)$" || true
+    Should Be Equal    ${running_containers}    2
+
+    # No publishing: no shared auth service and no Traefik route.
+    ${output}    ${rc} =    Run As Module User    systemctl --user is-active hermes-auth.service
+    Should Not Be Equal As Integers    ${rc}    0
+    ${route_output} =    Run Module Action    ${TRAEFIK_ID}    get-route    {"instance":"${module_id}-hermes-auth"}
+    Should Be Equal    ${route_output}    {}
+
+    ${soul_content}    ${rc} =    Run As Module User    podman exec hermes-1 cat /opt/data/SOUL.md
+    ${home_env_content}    ${rc} =    Run As Module User    podman exec hermes-1 cat /opt/data/.env
     Should Contain    ${soul_content}    Your name is Foo Bar, you are an Hermes Agent that runs on NethServer8
-    Should Contain    ${soul_content}    You are a pragmatic technical partner who values correctness, clarity, and operational reality.
     Should Contain    ${home_env_content}    AGENT_NAME=Foo Bar
 
-Check if stopped agent disables runtime but keeps files
-    ${configure_payload} =    Set Variable    {"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"stop"}]}
-    ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '${configure_payload}'
-    ...    return_rc=True  return_stdout=False
+Check if publishing without an allowed user is rejected
+    ${output} =    Module Action Should Fail    ${module_id}    configure-module    {"base_virtualhost":"${DASHBOARD_HOST}","user_domain":"","lets_encrypt":false,"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start"}]}
+    Should Contain    ${output}    agent_allowed_user_required
+    # The rejected request must not have touched the running agent.
+    ${output}    ${rc} =    Run As Module User    systemctl --user is-active --quiet hermes@1.service
     Should Be Equal As Integers    ${rc}    0
-    ${output} =    Execute Command    api-cli run module/${module_id}/get-configuration --data '{}'
-    ${runtime_output} =    Execute Command    api-cli run module/${module_id}/get-agent-runtime --data '{}'
-    ${lets_encrypt} =    Evaluate    json.loads(r'''${output}''')['lets_encrypt']    json
-    ${agent_status} =    Evaluate    json.loads(r'''${output}''')['agents'][0]['status']    json
-    ${agent_runtime_status} =    Evaluate    json.loads(r'''${runtime_output}''')['agents'][0]['runtime_status']    json
-    ${service_output}  ${service_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes@1.service'
+
+Check if a user domain can be provisioned for dashboard login
+    ${output}  ${rc} =    Execute Command    add-module ${LDAP_IMAGE} 1
     ...    return_rc=True
-    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -Ec "^hermes-" || true'
-    ${container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-1'
-    ...    return_rc=True  return_stdout=False
-    ${pod_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-pod-1'
-    ...    return_rc=True  return_stdout=False
-    ${agent_env} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1.env' -print -quit
-    ${volume_name} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman volume inspect --format "{{.Name}}" hermes-agent-1-home'
-    Should Be Equal    ${agent_status}    stop
-    Should Be Equal    ${lets_encrypt}    ${True}
-    Should Be Equal    ${agent_runtime_status}    stop
-    Should Not Be Equal As Integers    ${service_rc}    0
-    Should Be Equal    ${running_containers}    0
-    Should Not Be Equal As Integers    ${container_rc}    0
-    Should Not Be Equal As Integers    ${pod_rc}    0
-    Should Not Be Empty    ${agent_env}
-    Should Be Equal    ${volume_name}    hermes-agent-1-home
+    Should Be Equal As Integers    ${rc}    0
+    &{output} =    Evaluate    ${output}
+    Set Suite Variable    ${ldap_id}    ${output.module_id}
+    Run Module Action    ${ldap_id}    configure-module    {"provision":"new-domain","domain":"${USER_DOMAIN}","admuser":"admin","admpass":"${USER_PASSWORD}"}
+    Run Module Action    ${ldap_id}    add-user    {"user":"${ALLOWED_USER}","display_name":"Alice Example","password":"${USER_PASSWORD}","groups":[]}
+
+    ${domains_output} =    Run Module Action    ${module_id}    list-user-domains    {}
+    ${domains} =    Evaluate    [d['name'] for d in json.loads(r'''${domains_output}''')['domains']]    json
+    List Should Contain Value    ${domains}    ${USER_DOMAIN}
+    ${users_output} =    Run Module Action    ${module_id}    list-domain-users    {"domain":"${USER_DOMAIN}"}
+    ${users} =    Evaluate    [u['user'] for u in json.loads(r'''${users_output}''')['users']]    json
+    List Should Contain Value    ${users}    ${ALLOWED_USER}
+
+Check if publishing the dashboard creates the shared route and auth proxy
+    Run Module Action    ${module_id}    configure-module    {"base_virtualhost":"${DASHBOARD_HOST}","user_domain":"${USER_DOMAIN}","lets_encrypt":false,"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"start","allowed_user":"${ALLOWED_USER}"}]}
+    Wait Until Agent Runtime Is Settled    1
+    Wait Until Auth Proxy Is Active
+
+    ${output} =    Run Module Action    ${module_id}    get-configuration    {}
+    ${config} =    Evaluate    json.loads(r'''${output}''')    json
+    Should Be Equal    ${config['base_virtualhost']}    ${DASHBOARD_HOST}
+    Should Be Equal    ${config['user_domain']}    ${USER_DOMAIN}
+    Should Be Equal    ${config['agents'][0]['allowed_user']}    ${ALLOWED_USER}
+
+    ${route_output} =    Run Module Action    ${TRAEFIK_ID}    get-route    {"instance":"${module_id}-hermes-auth"}
+    ${route} =    Evaluate    json.loads(r'''${route_output}''')    json
+    Should Be Equal    ${route['host']}    ${DASHBOARD_HOST}
+    Should Be Equal    ${route['url']}    http://127.0.0.1:${tcp_port}
+    Should Be Equal    ${route['lets_encrypt']}    ${False}
+
+    # Auth runtime files exist; LDAP settings stay in the auth proxy files only.
+    ${auth_files_rc} =    Execute Command    test -f ${state_dir}/authproxy.env && test -f ${state_dir}/authproxy_secrets.env && test -f ${state_dir}/authproxy/agents.json
+    ...    return_rc=True    return_stdout=False
+    Should Be Equal As Integers    ${auth_files_rc}    0    auth proxy runtime files are missing
+    ${bind_dn_count} =    Execute Command    grep -c '^LDAP_BIND_DN=' ${state_dir}/authproxy_secrets.env
+    Should Be Equal    ${bind_dn_count}    1
+    File Should Not Contain LDAP Keys    ${state_dir}/agents/1/agent.env
+    File Should Not Contain LDAP Keys    ${state_dir}/secrets/1.env
+
+    # Login flow through the loopback listener Traefik forwards to.
+    Execute Command    rm -f ${COOKIE_JAR}
+    ${form_status} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' http://127.0.0.1:${tcp_port}/login
+    Should Be Equal    ${form_status}    200
+    ${anonymous_me} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' http://127.0.0.1:${tcp_port}/api/auth/me
+    Should Be Equal    ${anonymous_me}    401
+    ${bad_login} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' -X POST --data-urlencode 'username=${ALLOWED_USER}' --data-urlencode 'password=wrong-password' --data-urlencode 'next=/' http://127.0.0.1:${tcp_port}/login
+    Should Be Equal    ${bad_login}    401
+    ${good_login} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' -c ${COOKIE_JAR} -X POST --data-urlencode 'username=${ALLOWED_USER}' --data-urlencode 'password=${USER_PASSWORD}' --data-urlencode 'next=/' http://127.0.0.1:${tcp_port}/login
+    Should Be Equal    ${good_login}    303
+    ${me_output} =    Execute Command    curl -s -b ${COOKIE_JAR} http://127.0.0.1:${tcp_port}/api/auth/me
+    ${me} =    Evaluate    json.loads(r'''${me_output}''')    json
+    Should Be Equal    ${me['user_id']}    ${ALLOWED_USER}
+    ${auth_log_count}    ${rc} =    Run As Module User    journalctl --user -u hermes-auth.service --no-pager | grep -c 'event=auth_success' || true
+    Should Not Be Equal    ${auth_log_count}    0
+
+Check if stopped agent disables runtime but keeps files
+    Run Module Action    ${module_id}    configure-module    {"base_virtualhost":"${DASHBOARD_HOST}","user_domain":"${USER_DOMAIN}","lets_encrypt":false,"agents":[{"id":1,"name":"Foo Bar","role":"developer","status":"stop","allowed_user":"${ALLOWED_USER}"}]}
+    ${output} =    Run Module Action    ${module_id}    get-configuration    {}
+    ${config} =    Evaluate    json.loads(r'''${output}''')    json
+    ${runtime_output} =    Run Module Action    ${module_id}    get-agent-runtime    {}
+    ${runtime} =    Evaluate    json.loads(r'''${runtime_output}''')    json
+    Should Be Equal    ${config['agents'][0]['status']}    stop
+    Should Be Equal    ${runtime['agents'][0]['runtime_status']}    stop
+    ${service_output}    ${service_rc} =    Run As Module User    systemctl --user is-active hermes@1.service
     Should Be Equal    ${service_output}    inactive
+    ${output}    ${rc} =    Run As Module User    podman container exists hermes-1
+    Should Not Be Equal As Integers    ${rc}    0
+    ${output}    ${rc} =    Run As Module User    podman pod exists hermes-pod-1
+    Should Not Be Equal As Integers    ${rc}    0
+    Execute Command    test -f ${state_dir}/agents/1/metadata.json && test -f ${state_dir}/agents/1/agent.env && test -f ${state_dir}/secrets/1.env    return_stdout=False
+    Agent Home Subdir Should Exist    1
+    # A stopped agent has no login target: authentication must be refused.
+    ${stopped_login} =    Execute Command    curl -s -o /dev/null -w '\%{http_code}' -X POST --data-urlencode 'username=${ALLOWED_USER}' --data-urlencode 'password=${USER_PASSWORD}' --data-urlencode 'next=/' http://127.0.0.1:${tcp_port}/login
+    Should Be Equal    ${stopped_login}    401
 
 Check if deleting agent cleans runtime files
-    ${configure_payload} =    Set Variable    {"agents":[]}
-    ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '${configure_payload}'
-    ...    return_rc=True  return_stdout=False
-    Should Be Equal As Integers    ${rc}    0
-    ${output} =    Execute Command    api-cli run module/${module_id}/get-configuration --data '{}'
-    ${agent_count} =    Evaluate    len(json.loads(r'''${output}''')['agents'])    json
-    ${service_output}  ${service_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'systemctl --user is-active hermes@1.service'
-    ...    return_rc=True
-    ${running_containers} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman ps --format "{{.Names}}" | grep -Ec "^hermes-" || true'
-    ${container_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman container exists hermes-1'
-    ...    return_rc=True  return_stdout=False
-    ${pod_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman pod exists hermes-pod-1'
-    ...    return_rc=True  return_stdout=False
-    ${agent_env} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1.env' -print -quit
-    ${generated_env_count} =    Execute Command    find ${module_home} -maxdepth 8 -regextype posix-extended -regex '.*/agent_1(_secrets)?\.env' | wc -l
-    ${agent_secrets} =    Execute Command    find ${module_home} -maxdepth 8 -name 'agent_1_secrets.env' -print -quit
-    ${agent_metadata} =    Execute Command    find ${module_home} -maxdepth 8 -path '*/agents/1/metadata.json' -print -quit
-    ${volume_exists_rc} =    Execute Command    runuser -u ${module_id} -- bash -lc 'podman volume exists hermes-agent-1-home'
-    ...    return_rc=True  return_stdout=False
-    ${route_output} =    Execute Command    api-cli run module/traefik1/get-route --data '{"instance":"${module_id}-hermes-agent-1"}'
-    Should Be Equal As Integers    ${agent_count}    0
-    Should Not Be Equal As Integers    ${service_rc}    0
-    Should Be Equal    ${running_containers}    0
-    Should Not Be Equal As Integers    ${container_rc}    0
-    Should Not Be Equal As Integers    ${pod_rc}    0
-    Should Be Empty    ${agent_env}
-    Should Be Equal    ${generated_env_count}    0
-    Should Be Empty    ${agent_secrets}
-    Should Be Empty    ${agent_metadata}
-    Should Not Be Equal As Integers    ${volume_exists_rc}    0
+    Run Module Action    ${module_id}    configure-module    {"base_virtualhost":"${DASHBOARD_HOST}","user_domain":"${USER_DOMAIN}","lets_encrypt":false,"agents":[]}
+    ${output} =    Run Module Action    ${module_id}    get-configuration    {}
+    ${config} =    Evaluate    json.loads(r'''${output}''')    json
+    Length Should Be    ${config['agents']}    0
+    ${leftovers} =    Execute Command    ls -d ${state_dir}/agents/1 ${state_dir}/secrets/1.env ${state_dir}/dashboard-sockets/agent-1.sock 2>/dev/null | wc -l
+    Should Be Equal    ${leftovers}    0
+    Agent Home Subdir Should Not Exist    1
+    ${output}    ${rc} =    Run As Module User    podman volume exists hermes-agents-home
+    Should Be Equal As Integers    ${rc}    0    the shared volume must survive agent deletion
+    # With no agents left the shared route and auth service are removed.
+    ${route_output} =    Run Module Action    ${TRAEFIK_ID}    get-route    {"instance":"${module_id}-hermes-auth"}
     Should Be Equal    ${route_output}    {}
-    Should Be Equal    ${service_output}    inactive
+    ${output}    ${rc} =    Run As Module User    systemctl --user is-active hermes-auth.service
+    Should Not Be Equal As Integers    ${rc}    0
 
 Check if hermes-agent can be removed cleanly
     ${rc} =    Execute Command    remove-module --no-preserve ${module_id}
@@ -166,3 +249,8 @@ Check if hermes-agent can be removed cleanly
     ${module_home_exists_rc} =    Execute Command    test -e ${module_home}
     ...    return_rc=True  return_stdout=False
     Should Not Be Equal As Integers    ${module_home_exists_rc}    0
+    ${route_output} =    Run Module Action    ${TRAEFIK_ID}    get-route    {"instance":"${module_id}-hermes-auth"}
+    Should Be Equal    ${route_output}    {}
+    ${rc} =    Execute Command    remove-module --no-preserve ${ldap_id}
+    ...    return_rc=True  return_stdout=False
+    Should Be Equal As Integers    ${rc}    0

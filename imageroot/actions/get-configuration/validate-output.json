@@ -10,9 +10,48 @@
         "base_virtualhost",
         "user_domain",
         "lets_encrypt",
-        "agents"
+        "agents",
+        "roles",
+        "max_agents",
+        "invalid_agents"
     ],
     "properties": {
+        "roles": {
+            "description": "Roles accepted by configure-module, in display order.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "string",
+                "enum": [
+                    "default",
+                    "developer",
+                    "marketing",
+                    "sales",
+                    "customer_support",
+                    "social_media_manager",
+                    "business_consultant",
+                    "researcher"
+                ]
+            }
+        },
+        "max_agents": {
+            "description": "Highest agent id accepted by configure-module.",
+            "type": "integer",
+            "const": 30
+        },
+        "invalid_agents": {
+            "description": "Agent state directories whose metadata.json could not be validated. configure-module refuses to run until they are repaired or removed.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["directory", "error"],
+                "properties": {
+                    "directory": {"type": "string"},
+                    "error": {"type": "string"}
+                }
+            }
+        },
         "base_virtualhost": {
             "type": "string"
         },
