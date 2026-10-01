@@ -9,4 +9,6 @@ on:
 
 jobs:
   build-apidoc:
+    permissions:
+      contents: write
     uses: NethServer/ns8-github-actions/.github/workflows/build-apidoc.yml@v1
