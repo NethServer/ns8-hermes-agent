@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import runpy
 import subprocess
 import sys
@@ -1940,7 +1941,9 @@ class HermesModuleStateTest(unittest.TestCase):
     def test_ci_harness_supports_yarn4_and_current_ns8(self):
         for workflow_path in (TEST_WORKFLOW_PATH, RENOVATE_UI_WORKFLOW_PATH):
             workflow = workflow_path.read_text(encoding="utf-8")
-            self.assertLess(workflow.index("run: corepack enable"), workflow.index("uses: actions/setup-node@v4"))
+            setup_node = re.search(r"uses: actions/setup-node@v\d+", workflow)
+            self.assertIsNotNone(setup_node, "setup-node step missing")
+            self.assertLess(workflow.index("run: corepack enable"), setup_node.start())
 
         digitalocean_workflow = DIGITALOCEAN_WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertNotIn(
