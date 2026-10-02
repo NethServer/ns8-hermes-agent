@@ -11,7 +11,6 @@ This document maps the current layout.
 - `NS8_RESOURCE_MAP.md`: NS8 reference index.
 - `HERMES_RESOURCE_MAP.md`: Hermes reference index.
 - `build-images.sh`: builds the module image plus the auth proxy, Hermes wrapper, and socket relay component images.
-- `test-module.sh`: runs the module test suite.
 - `renovate.json`: Renovate configuration.
 - `ruff.toml`: Python lint/format baseline covering `imageroot/`, `containers/auth/` and `tests/`.
 - `.github/`: custom Copilot agents, repository skills, and GitHub Actions workflows.
@@ -165,6 +164,5 @@ This module adds a shared auth proxy and per-agent Unix socket relay between Tra
 - `workflows/clean-registry.yml`: deletes `ghcr.io` `hermes-agent` package images for deleted refs or manual cleanup runs.
 - `workflows/create-testing-release.yml`: creates the next testing release for eligible pushes on `main`, while ignoring workflow-only, test-only, and selected docs-only changes.
 - `workflows/publish-images.yml`: publishes module and component images for published GitHub releases and supports manual `workflow_dispatch` runs.
-- `workflows/test-module.yml`: resolves the published module image and delegates module tests to the DigitalOcean infrastructure workflow.
-- `workflows/test-on-digitalocean-infra.yml`: provisions NS8 test clusters on DigitalOcean and runs the selected test script.
+- `workflows/test-module.yml`: runs the Robot Framework suite in a QEMU virtual machine through the shared `test-module-qemu.yml` workflow.
 - `workflows/test-ui-build-renovate.yml`: validates UI build behavior for Renovate updates.

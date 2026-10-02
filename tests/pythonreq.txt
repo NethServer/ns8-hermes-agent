@@ -1,5 +1,5 @@
-# Robot Framework runner dependencies for test-module.sh. Pinned to current
-# releases; the suite uses only SSHLibrary and BuiltIn keywords.
+# Robot Framework runner dependencies, installed by the shared QEMU test script.
+# Pinned to current releases.
 robotframework==7.4.2
 robotframework-sshlibrary==3.8.0
 paramiko==5.0.0
