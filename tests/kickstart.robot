@@ -4,7 +4,7 @@ Library    SSHLibrary
 
 *** Variables ***
 ${TRAEFIK_ID}        traefik1
-${LDAP_IMAGE}        ghcr.io/nethserver/openldap:latest
+${LDAP_IMAGE}        openldap
 ${USER_DOMAIN}       hermes.test
 ${DASHBOARD_HOST}    agents.example.test
 ${ALLOWED_USER}      alice
