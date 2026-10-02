@@ -32,8 +32,6 @@ PUBLISH_IMAGES_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "publish-images.
 CREATE_TESTING_RELEASE_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "create-testing-release.yml"
 TEST_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "test.yml"
 RENOVATE_UI_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "test-ui-build-renovate.yml"
-DIGITALOCEAN_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "test-on-digitalocean-infra.yml"
-TEST_MODULE_PATH = ROOT / "test-module.sh"
 KICKSTART_PATH = ROOT / "tests" / "kickstart.robot"
 CREATE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "create-module"
 CONFIGURE_MODULE_ACTION_DIR = ROOT / "imageroot" / "actions" / "configure-module"
@@ -1941,15 +1939,6 @@ class HermesModuleStateTest(unittest.TestCase):
         for workflow_path in (TEST_WORKFLOW_PATH, RENOVATE_UI_WORKFLOW_PATH):
             workflow = workflow_path.read_text(encoding="utf-8")
             self.assertLess(workflow.index("run: corepack enable"), workflow.index("uses: actions/setup-node@v4"))
-
-        digitalocean_workflow = DIGITALOCEAN_WORKFLOW_PATH.read_text(encoding="utf-8")
-        self.assertNotIn(
-            "${{ github.workspace }}/module/${{ inputs.path }}/tests/outputs/",
-            digitalocean_workflow,
-        )
-
-        runner = TEST_MODULE_PATH.read_text(encoding="utf-8")
-        self.assertIn("rfbrowser-stable:20.1.0", runner)
 
         kickstart = KICKSTART_PATH.read_text(encoding="utf-8")
         self.assertIn("runagent -m ${module_id} sh -lc", kickstart)

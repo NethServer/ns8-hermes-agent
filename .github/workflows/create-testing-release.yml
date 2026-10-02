@@ -10,7 +10,6 @@ on:
       - '.gitignore'
       - 'LICENSE'
       - 'renovate.json'
-      - 'test-module.sh'
   workflow_dispatch:
     inputs:
       branch_or_env:

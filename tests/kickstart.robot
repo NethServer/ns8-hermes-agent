@@ -4,33 +4,43 @@ Library    SSHLibrary
 
 *** Variables ***
 ${TRAEFIK_ID}        traefik1
-${LDAP_IMAGE}        ghcr.io/nethserver/openldap:latest
+${LDAP_IMAGE}        openldap
 ${USER_DOMAIN}       hermes.test
 ${DASHBOARD_HOST}    agents.example.test
 ${ALLOWED_USER}      alice
 ${USER_PASSWORD}     Nethesis,1234
 ${COOKIE_JAR}        /tmp/hermes-agent-test-cookies
+${ADMIN_USER}        admin
+${ADMIN_PASSWORD}    Nethesis,1234
 
 *** Keywords ***
+Login to cluster-admin
+    New Page    https://${NODE_ADDR}/cluster-admin/
+    Fill Text    text="Username"    ${ADMIN_USER}
+    Click    button >> text="Continue"
+    Fill Text    text="Password"    ${ADMIN_PASSWORD}
+    Click    button >> text="Log in"
+    Wait For Elements State    css=#main-content    visible    timeout=10s
+
 Run Module Action
     [Arguments]    ${module}    ${action}    ${payload}
     ${output}    ${rc} =    Execute Command    api-cli run module/${module}/${action} --data '${payload}'
     ...    return_rc=True
     Should Be Equal As Integers    ${rc}    0    ${action} on ${module} failed: ${output}
-    [Return]    ${output}
+    RETURN    ${output}
 
 Module Action Should Fail
     [Arguments]    ${module}    ${action}    ${payload}
     ${output}    ${rc} =    Execute Command    api-cli run module/${module}/${action} --data '${payload}'
     ...    return_rc=True
     Should Not Be Equal As Integers    ${rc}    0    ${action} on ${module} unexpectedly succeeded: ${output}
-    [Return]    ${output}
+    RETURN    ${output}
 
 Run As Module User
     [Arguments]    ${command}
     ${output}    ${rc} =    Execute Command    runagent -m ${module_id} sh -lc '${command}'
     ...    return_rc=True
-    [Return]    ${output}    ${rc}
+    RETURN    ${output}    ${rc}
 
 Wait Until Agent Runtime Is Settled
     [Arguments]    ${agent_id}
@@ -241,6 +251,22 @@ Check if deleting agent cleans runtime files
     Should Be Equal    ${route_output}    {}
     ${output}    ${rc} =    Run As Module User    systemctl --user is-active hermes-auth.service
     Should Not Be Equal As Integers    ${rc}    0
+
+Take screenshots
+    [Tags]    ui
+    Import Library    Browser
+    New Browser    chromium    headless=True
+    New Context    ignoreHTTPSErrors=True
+    Login to cluster-admin
+    Go To    https://${NODE_ADDR}/cluster-admin/#/apps/${module_id}
+    Wait For Elements State    iframe >>> h2 >> text="Status"    visible    timeout=10s
+    Sleep    5s
+    Take Screenshot    filename=${OUTPUT DIR}/browser/screenshot/1._Status.png
+    Go To    https://${NODE_ADDR}/cluster-admin/#/apps/${module_id}?page=settings
+    Wait For Elements State    iframe >>> h2 >> text="Settings"    visible    timeout=10s
+    Sleep    5s
+    Take Screenshot    filename=${OUTPUT DIR}/browser/screenshot/2._Settings.png
+    Close Browser
 
 Check if hermes-agent can be removed cleanly
     ${rc} =    Execute Command    remove-module --no-preserve ${module_id}
