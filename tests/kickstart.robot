@@ -17,20 +17,20 @@ Run Module Action
     ${output}    ${rc} =    Execute Command    api-cli run module/${module}/${action} --data '${payload}'
     ...    return_rc=True
     Should Be Equal As Integers    ${rc}    0    ${action} on ${module} failed: ${output}
-    [Return]    ${output}
+    RETURN    ${output}
 
 Module Action Should Fail
     [Arguments]    ${module}    ${action}    ${payload}
     ${output}    ${rc} =    Execute Command    api-cli run module/${module}/${action} --data '${payload}'
     ...    return_rc=True
     Should Not Be Equal As Integers    ${rc}    0    ${action} on ${module} unexpectedly succeeded: ${output}
-    [Return]    ${output}
+    RETURN    ${output}
 
 Run As Module User
     [Arguments]    ${command}
     ${output}    ${rc} =    Execute Command    runagent -m ${module_id} sh -lc '${command}'
     ...    return_rc=True
-    [Return]    ${output}    ${rc}
+    RETURN    ${output}    ${rc}
 
 Wait Until Agent Runtime Is Settled
     [Arguments]    ${agent_id}
