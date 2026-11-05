@@ -1,6 +1,8 @@
 FROM node:24-bookworm
-RUN corepack enable \
-    && yarn set version stable
+# renovate: datasource=npm packageName=corepack
+ARG COREPACK_VERSION=0.36.0
+RUN npm install -g corepack@${COREPACK_VERSION} \
+    && corepack enable
 WORKDIR /app
 EXPOSE 8080
 ENTRYPOINT ["./container-entrypoint.sh"]

@@ -14,6 +14,8 @@ jobs:
 
     env:
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      # renovate: datasource=npm packageName=corepack
+      COREPACK_VERSION: 0.36.0
 
     defaults:
       run:
@@ -27,7 +29,7 @@ jobs:
       # "packageManager" field in ui/package.json and activated by Corepack.
       # Enable it before setup-node asks Yarn for its cache directory.
       - name: Enable Corepack
-        run: corepack enable
+        run: npm install -g corepack@${COREPACK_VERSION} && corepack enable
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
